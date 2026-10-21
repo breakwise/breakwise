@@ -24,7 +24,7 @@ import verify_examples as ve
 
 UTC = dt.UTC
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REAL_NOTICE = REPO_ROOT / "notices/pypi/pydantic-ai/BFX-2026-0001.yaml"
+REAL_NOTICE = REPO_ROOT / "notices/pypi/pydantic-ai/BW-2026-0001.yaml"
 PYTHON = Path(sys.executable)
 UPLOADED = dt.datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -382,10 +382,10 @@ def test_a_blocked_call_that_the_example_ignores_is_reported_but_allowed(tmp_pat
 def test_examples_get_fake_keys_and_no_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("BUMPFIX_TEST_SECRET", "do-not-leak")
+    monkeypatch.setenv("BREAKWISE_TEST_SECRET", "do-not-leak")
     code = (
         "import os, sys\n"
-        "assert 'BUMPFIX_TEST_SECRET' not in os.environ\n"
+        "assert 'BREAKWISE_TEST_SECRET' not in os.environ\n"
         f"assert os.environ['OPENAI_API_KEY'] == {ve.FAKE_KEY!r}\n"
         f"assert os.environ['HOME'] == {str(tmp_path)!r}\n"
         "assert sys.flags.isolated and sys.flags.utf8_mode\n"
@@ -516,7 +516,7 @@ FAKE_VERSIONS = {
 FAKE_NOTICE = """\
 ---
 schema_version: "0.1"
-id: BFX-2026-9001
+id: BW-2026-9001
 status: draft
 published: "2026-10-21"
 package:
@@ -564,7 +564,7 @@ class FakeIndex:
 
 
 def write_notice(tmp_path: Path, breaks_in: str = "2.0.0", works_since: str = "1.5.0") -> Path:
-    notice = tmp_path / "BFX-2026-9001.yaml"
+    notice = tmp_path / "BW-2026-9001.yaml"
     text = FAKE_NOTICE.format(breaks_in=breaks_in, works_since=works_since)
     notice.write_text(text, encoding="utf-8")
     return notice
@@ -685,7 +685,7 @@ def test_changed_files_handles_unusual_file_names(git_repo: Path) -> None:
     commit(git_repo, "base", **{"README.md": "one\n", "old.txt": "old\n"})
     base = git(git_repo, "rev-parse", "HEAD")
 
-    unusual = git_repo / "notices" / "pypi" / "démo lib" / "BFX-2026-0002.yaml"
+    unusual = git_repo / "notices" / "pypi" / "démo lib" / "BW-2026-0002.yaml"
     unusual.parent.mkdir(parents=True)
     unusual.write_text("id: x\n", encoding="utf-8")
     (git_repo / "old.txt").unlink()
@@ -693,7 +693,7 @@ def test_changed_files_handles_unusual_file_names(git_repo: Path) -> None:
 
     assert sorted(ve.changed_files(git_repo, base)) == [
         "README.md",
-        "notices/pypi/démo lib/BFX-2026-0002.yaml",
+        "notices/pypi/démo lib/BW-2026-0002.yaml",
     ]
     with pytest.raises(ve.VerifyError, match="git diff against no-such-ref failed"):
         ve.changed_files(git_repo, "no-such-ref")
@@ -716,10 +716,10 @@ def test_changed_files_needs_git(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_all_notices_skips_markdown_and_hidden_files(tmp_path: Path) -> None:
-    for name in ("notices/pypi/a/BFX-2026-0001.yaml", "notices/LICENSE.md", "notices/.x/B.yaml"):
+    for name in ("notices/pypi/a/BW-2026-0001.yaml", "notices/LICENSE.md", "notices/.x/B.yaml"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text("x\n", encoding="utf-8")
-    assert ve.all_notices(tmp_path) == [tmp_path / "notices/pypi/a/BFX-2026-0001.yaml"]
+    assert ve.all_notices(tmp_path) == [tmp_path / "notices/pypi/a/BW-2026-0001.yaml"]
 
 
 def test_all_notices_are_verified_when_the_tooling_changes() -> None:
@@ -729,7 +729,7 @@ def test_all_notices_are_verified_when_the_tooling_changes() -> None:
 
 
 def test_only_changed_notices_are_verified_otherwise() -> None:
-    notice = "notices/pypi/pydantic-ai/BFX-2026-0001.yaml"
+    notice = "notices/pypi/pydantic-ai/BW-2026-0001.yaml"
     assert ve.notices_to_verify(REPO_ROOT, [notice, "README.md"]) == [REPO_ROOT / notice]
     assert ve.notices_to_verify(REPO_ROOT, ["README.md", "notices/LICENSE.md"]) == []
     assert ve.notices_to_verify(REPO_ROOT, ["docs/notices/x.yaml"]) == []

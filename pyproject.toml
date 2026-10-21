@@ -1,4 +1,4 @@
-# Settings for the development tools. The bumpfix package itself is not defined yet.
+# Settings for the development tools. The Breakwise package itself is not defined yet.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

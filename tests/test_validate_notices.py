@@ -14,7 +14,7 @@ import yaml
 import validate_notices as vn
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-NOTICE = Path("notices/pypi/pydantic-ai/BFX-2026-0001.yaml")
+NOTICE = Path("notices/pypi/pydantic-ai/BW-2026-0001.yaml")
 TODAY = dt.date(2026, 10, 21)
 
 BEFORE_BLOCK = (
@@ -75,26 +75,26 @@ def test_a_valid_notice_passes(repo: Path) -> None:
 
 def test_only_notices_and_markdown_files_belong_in_the_registry(repo: Path) -> None:
     folder = repo / NOTICE.parent
-    for name in ("BFX-2026-0002.YAML", "BFX-2026-0003.yml", "BFX-2026-0004", "notes.txt"):
+    for name in ("BW-2026-0002.YAML", "BW-2026-0003.yml", "BW-2026-0004", "notes.txt"):
         (folder / name).write_text("id: x\n", encoding="utf-8")
     (folder / "README.md").write_text("# Notes\n", encoding="utf-8")
     (repo / "notices/.DS_Store").write_bytes(b"\0")
     (repo / "notices/.cache").mkdir()
-    (repo / "notices/.cache/BFX-2026-0005.yaml").write_text("id: x\n", encoding="utf-8")
+    (repo / "notices/.cache/BW-2026-0005.yaml").write_text("id: x\n", encoding="utf-8")
     message = "Notice files must end in .yaml, and other files here in .md."
     assert problems_in(repo) == [
         f"{NOTICE.parent.as_posix()}/{name}:1: {message}"
-        for name in ("BFX-2026-0002.YAML", "BFX-2026-0003.yml", "BFX-2026-0004", "notes.txt")
+        for name in ("BW-2026-0002.YAML", "BW-2026-0003.yml", "BW-2026-0004", "notes.txt")
     ]
     assert vn.validate(repo, today=TODAY)[1] == 1
 
 
 def test_duplicate_ids_are_rejected(repo: Path) -> None:
-    copy = repo / "notices/pypi/openai/BFX-2026-0001.yaml"
+    copy = repo / "notices/pypi/openai/BW-2026-0001.yaml"
     copy.parent.mkdir(parents=True)
     shutil.copy(repo / NOTICE, copy)
     # Files are checked in path order, so the copy in openai/ claims the ID first.
-    message = "ID BFX-2026-0001 is already used by notices/pypi/openai/BFX-2026-0001.yaml."
+    message = "ID BW-2026-0001 is already used by notices/pypi/openai/BW-2026-0001.yaml."
     assert f"{NOTICE.as_posix()}:3: {message}" in problems_in(repo)
 
 
@@ -129,7 +129,7 @@ def test_an_empty_document_is_rejected(repo: Path) -> None:
 def test_a_second_document_is_rejected_at_its_line(repo: Path) -> None:
     path = repo / NOTICE
     text = path.read_text(encoding="utf-8")
-    path.write_text(text + "---\nid: BFX-2026-0002\n", encoding="utf-8")
+    path.write_text(text + "---\nid: BW-2026-0002\n", encoding="utf-8")
     line = text.count("\n") + 1
     assert problems_in(repo) == [
         f"{NOTICE.as_posix()}:{line}: A notice file must contain only one YAML document."
@@ -245,10 +245,10 @@ def test_duplicate_keys_are_rejected_at_any_depth(repo: Path) -> None:
             id="rename with another type",
         ),
         pytest.param(
-            "id: BFX-2026-0001",
-            "id: BFX-26-1",
+            "id: BW-2026-0001",
+            "id: BW-26-1",
             "id:",
-            "id: 'BFX-26-1' is not valid. Expected an ID like BFX-2026-0001: "
+            "id: 'BW-26-1' is not valid. Expected an ID like BW-2026-0001: "
             "the year it was published, then a number with at least four digits.",
             id="bad id",
         ),
@@ -346,7 +346,7 @@ def test_field_names_read_like_the_docs() -> None:
             'published: "2026-10-21"',
             'published: "2025-10-21"',
             "id:",
-            "The year in BFX-2026-0001 must be the year it was published (2025).",
+            "The year in BW-2026-0001 must be the year it was published (2025).",
             id="id year",
         ),
         pytest.param(
@@ -395,14 +395,14 @@ def test_boundaries_that_are_allowed(repo: Path, old: str, new: str) -> None:
 
 
 def test_wrong_file_name_is_rejected(repo: Path) -> None:
-    (repo / NOTICE).rename(repo / NOTICE.with_name("BFX-2026-0002.yaml"))
-    rel = NOTICE.with_name("BFX-2026-0002.yaml").as_posix()
+    (repo / NOTICE).rename(repo / NOTICE.with_name("BW-2026-0002.yaml"))
+    rel = NOTICE.with_name("BW-2026-0002.yaml").as_posix()
     message = "from its id, package.ecosystem and package.name."
     assert problems_in(repo) == [f"{rel}:3: Must be stored at {NOTICE.as_posix()}, {message}"]
 
 
 def test_wrong_folder_is_rejected(repo: Path) -> None:
-    target = repo / "notices/pypi/pydantic/BFX-2026-0001.yaml"
+    target = repo / "notices/pypi/pydantic/BW-2026-0001.yaml"
     target.parent.mkdir(parents=True)
     (repo / NOTICE).rename(target)
     assert any(f"Must be stored at {NOTICE.as_posix()}" in p for p in problems_in(repo))
@@ -567,7 +567,7 @@ def test_readme_example_must_match_the_notice(repo: Path) -> None:
         f"README.md:3: The example must match {NOTICE.as_posix()} exactly."
     ]
 
-    quoted = notice_text.replace("id: BFX-2026-0001", 'id: "BFX-2026-0001"')
+    quoted = notice_text.replace("id: BW-2026-0001", 'id: "BW-2026-0001"')
     readme.write_text(f"```yaml\n{quoted}```\n", encoding="utf-8")
     assert problems_in(repo) == [
         f"README.md:1: The example must match {NOTICE.as_posix()} exactly."
@@ -576,16 +576,16 @@ def test_readme_example_must_match_the_notice(repo: Path) -> None:
 
 def test_readme_example_must_be_a_real_notice(repo: Path) -> None:
     readme = repo / vn.README_FILE
-    block = '```yaml\nschema_version: "0.1"\nid: BFX-2026-9999\n```\n'
+    block = '```yaml\nschema_version: "0.1"\nid: BW-2026-9999\n```\n'
     readme.write_text(f"\n{block}", encoding="utf-8")
     assert problems_in(repo) == [
-        "README.md:2: The example shows BFX-2026-9999, but there is no valid notice with that ID."
+        "README.md:2: The example shows BW-2026-9999, but there is no valid notice with that ID."
     ]
 
 
 @pytest.mark.parametrize(
     "block",
-    ['schema_version: "0.1"\nid: [BFX\n', 'schema_version: "0.1"\npublished: 2026-02-30\n'],
+    ['schema_version: "0.1"\nid: [BW\n', 'schema_version: "0.1"\npublished: 2026-02-30\n'],
 )
 def test_readme_example_must_be_valid_yaml(repo: Path, block: str) -> None:
     (repo / vn.README_FILE).write_text(f"```yaml\n{block}```\n", encoding="utf-8")

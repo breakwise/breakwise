@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/bumpfix/bumpfix/main/schema/notice-0.1.schema.json",
-  "title": "bumpfix notice",
+  "$id": "https://raw.githubusercontent.com/breakwise/breakwise/main/schema/notice-0.1.schema.json",
+  "title": "Breakwise notice",
   "description": "One breaking change in one package. Format version 0.1. See docs/notice-format.md.",
   "type": "object",
   "additionalProperties": false,
@@ -22,9 +22,9 @@
       "const": "0.1"
     },
     "id": {
-      "description": "an ID like BFX-2026-0001: the year it was published, then a number with at least four digits.",
+      "description": "an ID like BW-2026-0001: the year it was published, then a number with at least four digits.",
       "type": "string",
-      "pattern": "^BFX-[0-9]{4}-[0-9]{4,}$"
+      "pattern": "^BW-[0-9]{4}-[0-9]{4,}$"
     },
     "status": {
       "enum": ["draft", "verified"]

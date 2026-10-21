@@ -2,7 +2,7 @@
 """Run each notice's examples against real versions of its package.
 
     python tools/verify_examples.py --all
-    python tools/verify_examples.py notices/pypi/pydantic-ai/BFX-2026-0001.yaml
+    python tools/verify_examples.py notices/pypi/pydantic-ai/BW-2026-0001.yaml
     python tools/verify_examples.py --changed-since origin/main
 
 A notice must first pass tools/validate_notices.py. Then its examples are run
@@ -86,7 +86,7 @@ POSIX = os.name == "posix"
 
 PYPI_SIMPLE = "https://pypi.org/simple/{name}/"
 SIMPLE_JSON = "application/vnd.pypi.simple.v1+json"
-USER_AGENT = "bumpfix-verify-examples (+https://github.com/bumpfix/bumpfix)"
+USER_AGENT = "breakwise-verify-examples (+https://github.com/breakwise/breakwise)"
 PYPI_ATTEMPTS = 3
 PYPI_TIMEOUT = 60.0
 
@@ -100,7 +100,7 @@ EXAMPLE_TIMEOUT = 120.0
 STOPPED_OUTPUT_TIMEOUT = 5.0
 SUMMARY_LENGTH = 200
 
-FAKE_KEY = "bumpfix-fake-key"
+FAKE_KEY = "breakwise-fake-key"
 FAKE_KEY_VARIABLES = (
     "ANTHROPIC_API_KEY",
     "CO_API_KEY",
@@ -126,7 +126,7 @@ RUN_ALL_WHEN_CHANGED = frozenset(
     }
 )
 
-NETWORK_BLOCKED = "bumpfix: network access is blocked while running examples"
+NETWORK_BLOCKED = "breakwise: network access is blocked while running examples"
 # Runs an example with the network blocked. It records each network attempt and
 # the exception that ends the example, as Python prints it.
 GUARD_SCRIPT = f"""\
@@ -433,7 +433,7 @@ def verify_notice(
     releases = fetch(name)
     checks = plan_checks(releases, breaks_in, works_since)
     results = []
-    with tempfile.TemporaryDirectory(prefix="bumpfix-") as tmp_name:
+    with tempfile.TemporaryDirectory(prefix="breakwise-") as tmp_name:
         tmp = Path(tmp_name).resolve()
         interpreters: dict[Version, Path] = {}
         for number, check in enumerate(checks):

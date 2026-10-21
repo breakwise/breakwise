@@ -1,4 +1,4 @@
-# bumpfix
+# Breakwise
 
 **An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
 
@@ -14,7 +14,7 @@ and the information you need is scattered across changelogs and migration guides
 ## The idea
 
 When a car has a defect, the manufacturer issues a recall notice: which models are affected, what is wrong,
-and how a garage fixes it. bumpfix does the same for code.
+and how a garage fixes it. Breakwise does the same for code.
 
 Each breaking change becomes a small, machine-readable **notice** that says:
 
@@ -25,7 +25,7 @@ Each breaking change becomes a small, machine-readable **notice** that says:
 Notices live in this repository under [`notices/`](notices/), in the open,
 so developers, maintainers and AI coding agents can all use and improve them.
 
-On top of the registry, the bumpfix tool will:
+On top of the registry, the Breakwise tool will:
 
 1. read the notices that apply to your dependencies,
 2. find the affected code in your repository,
@@ -39,7 +39,7 @@ AI coding agents will be able to query the registry through an MCP server.
 ```yaml
 ---
 schema_version: "0.1"
-id: BFX-2026-0001
+id: BW-2026-0001
 status: verified
 published: "2026-10-21"
 package:
