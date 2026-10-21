@@ -22,7 +22,7 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 | Field | Required | Meaning |
 |---|---|---|
 | `schema_version` | yes | Version of this format: `"0.1"`. |
-| `id` | yes | Unique ID `BFX-<year>-<number>` with at least four digits, e.g. `BFX-2026-0001`. Never reused. |
+| `id` | yes | Unique ID `BFX-<year>-<number>`: the year it was published and a number with at least four digits, e.g. `BFX-2026-0001`. Never reused. |
 | `status` | yes | `draft` (not reviewed yet) or `verified` (checked by a maintainer against the official sources). |
 | `published` | yes | Date the notice was added, as `"YYYY-MM-DD"`. |
 | `modified` | no | Date of the last change to the notice, as `"YYYY-MM-DD"`. |
@@ -46,12 +46,17 @@ and are always quoted, e.g. `"2.0.0"`, so YAML keeps them as text. The same appl
 1. **One change per notice.** Two renames in the same release are two notices.
 2. **Official sources only.** Every notice links to the changelog, docs, release notes or source code
    of the package itself.
-3. **Automatic fixes first.** Use `rename` whenever the change is a pure rename.
+3. **Automatic fixes first.** Use `rename` whenever the change is a pure rename,
+   with the old name in `example.before` and only the new name in `example.after`.
    Use `instructions` only when a person has to decide.
-4. **Tested examples.** `example.before` must work on a version before `breaks_in`,
-   and `example.after` must work on `breaks_in` and later.
-5. **New notices start as `draft`.** A maintainer checks them against the sources and sets `verified`.
-6. **IDs:** take the next free number. A maintainer fixes any clash when merging.
+4. **Tested examples.** On every pull request, `tools/verify_examples.py` installs real versions from PyPI
+   and checks that `example.before` runs on the last release before `breaks_in` and fails on `breaks_in`,
+   and that `example.after` runs on `breaks_in` and on `works_since`.
+5. **Offline examples.** Examples run without network access and with fake API keys,
+   so they must not call real services. For a `behavior` change, use `assert`
+   so that the example fails when the behavior differs.
+6. **New notices start as `draft`.** A maintainer checks them against the sources and sets `verified`.
+7. **IDs:** take the next free number. A maintainer fixes any clash when merging.
 
 ## Changelog
 
