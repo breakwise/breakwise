@@ -107,7 +107,8 @@ def http_error(code: int) -> urllib.error.HTTPError:
 
 
 def test_fetch_releases_retries_until_pypi_answers(monkeypatch: pytest.MonkeyPatch) -> None:
-    pypi = FakePyPI(urllib.error.URLError("connection reset"), http_error(503), http_error(429))
+    errors = (urllib.error.URLError("connection reset"), http_error(500), http_error(429))
+    pypi = FakePyPI(*errors)
     monkeypatch.setattr(urllib.request, "urlopen", pypi)
     waits: list[float] = []
     assert ve.fetch_releases("demo", attempts=4, sleep=waits.append) == releases("1.0.0")
@@ -276,8 +277,10 @@ def test_install_reports_why_it_failed(
     fake_uv: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_UV_FAIL", "1")
-    with pytest.raises(ve.VerifyError, match="No solution found"):
+    with pytest.raises(ve.VerifyError) as raised:
         ve.install("demo", Version("1.0"), "2026-01-02T12:00:00Z", "python3", tmp_path / "env")
+    assert str(raised.value).startswith("Failed: ")
+    assert str(raised.value).endswith("\nNo solution found when resolving dependencies")
 
 
 def test_install_needs_uv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -742,6 +745,12 @@ def test_main_needs_exactly_one_kind_of_target(argv: list[str]) -> None:
     assert raised.value.code == 2
 
 
+def test_posix_is_detected() -> None:
+    assert ve.POSIX is (os.name == "posix")
+    if sys.platform in {"linux", "darwin"}:
+        assert ve.POSIX
+
+
 def test_main_refuses_to_run_outside_posix(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -803,6 +812,7 @@ def test_main_counts_notices_that_cannot_be_verified(
     out = capsys.readouterr().out
     rel = REAL_NOTICE.relative_to(REPO_ROOT).as_posix()
     assert "  FAIL  demo is not on PyPI.\n" in out
+    assert out.endswith("\n1 check(s) failed.\n")
     assert (f"::error file={rel}::demo is not on PyPI.\n" in out) is in_github
 
 

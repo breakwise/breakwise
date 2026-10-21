@@ -305,7 +305,7 @@ def plan_checks(
 
 def exclude_newer(uploaded: dt.datetime) -> str:
     """Return the cut-off for dependencies of a release, in RFC 3339 (UTC)."""
-    cutoff = (uploaded + DEPENDENCY_WINDOW).astimezone(dt.UTC).replace(microsecond=0)
+    cutoff = (uploaded + DEPENDENCY_WINDOW).astimezone(dt.UTC)
     return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -337,7 +337,7 @@ def run_example(
     interpreter: Path, code: str, workdir: Path, timeout: float = EXAMPLE_TIMEOUT
 ) -> Run:
     """Run example code offline, with fake API keys and nothing else from the environment."""
-    workdir.mkdir(parents=True, exist_ok=True)
+    workdir.mkdir(exist_ok=True)
     example = workdir / "example.py"
     guard = workdir / "run_example.py"
     network_log = workdir / "network.log"

@@ -144,6 +144,24 @@ def test_invalid_yaml_is_reported_at_its_line(repo: Path) -> None:
     assert "Invalid YAML:" in problems[0]
 
 
+def test_characters_yaml_does_not_allow_are_reported(repo: Path) -> None:
+    edit(repo, "summary: OpenAIModel", "summary: Open\x01AIModel")
+    problems = problems_in(repo)
+    assert len(problems) == 1
+    assert problems[0].startswith(f"{NOTICE.as_posix()}:1: Invalid YAML: unacceptable character")
+
+
+def test_values_of_the_wrong_kind_are_named(repo: Path) -> None:
+    edit(repo, "  aliases:\n    - pydantic-ai-slim", "  aliases: pydantic-ai-slim")
+    message = "package.aliases: 'pydantic-ai-slim' is not of type 'array'"
+    assert problems_in(repo) == [at(repo, "  aliases:", message)]
+
+
+def test_dates_are_checked_against_the_given_day(repo: Path) -> None:
+    problems, _ = vn.validate(repo, today=dt.date(2026, 1, 1))
+    assert [p.message for p in problems] == ["published: 2026-10-21 is in the future."]
+
+
 def test_keys_that_are_lists_are_rejected(repo: Path) -> None:
     path = repo / NOTICE
     path.write_text(path.read_text(encoding="utf-8") + "? [a, b]\n: c\n", encoding="utf-8")
@@ -286,6 +304,7 @@ def test_line_of_finds_a_value_or_its_closest_parent() -> None:
     assert vn.line_of(tree, ["a", "b"]) == 2
     assert vn.line_of(tree, ["c", 1]) == 5
     assert vn.line_of(tree, ["a", "missing"]) == 1
+    assert vn.line_of(tree, ["c", 2]) == 3
     assert vn.line_of(tree, ["c", 5]) == 3
     assert vn.line_of(tree, ["a", "b", "deeper"]) == 2
 
@@ -557,9 +576,10 @@ def test_readme_example_must_match_the_notice(repo: Path) -> None:
 
 def test_readme_example_must_be_a_real_notice(repo: Path) -> None:
     readme = repo / vn.README_FILE
-    readme.write_text('```yaml\nschema_version: "0.1"\nid: BFX-2026-9999\n```\n', encoding="utf-8")
+    block = '```yaml\nschema_version: "0.1"\nid: BFX-2026-9999\n```\n'
+    readme.write_text(f"\n{block}", encoding="utf-8")
     assert problems_in(repo) == [
-        "README.md:1: The example shows BFX-2026-9999, but there is no valid notice with that ID."
+        "README.md:2: The example shows BFX-2026-9999, but there is no valid notice with that ID."
     ]
 
 
