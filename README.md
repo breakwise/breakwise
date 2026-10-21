@@ -1,4 +1,9 @@
-# Breakwise
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/breakwise-logo-on-dark.svg">
+    <img alt="Breakwise" src=".github/assets/breakwise-logo-on-light.svg" height="44">
+  </picture>
+</h1>
 
 **An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
 
