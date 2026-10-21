@@ -2,5 +2,8 @@
 config:
   # Prose is not hard-wrapped, and tables cannot be.
   MD013: false
+  # The README header shows the logo in the reader's theme, which needs HTML.
+  MD033:
+    allowed_elements: [h1, picture, source, img]
 # Skip files that git ignores, such as .pytest_cache.
 gitignore: true
