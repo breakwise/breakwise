@@ -8,9 +8,9 @@ notices/<ecosystem>/<package>/<id>.yaml
 ```
 
 - `<ecosystem>` and `<package>` are lowercase, e.g. `notices/pypi/pydantic-ai/`.
-- The file name is the notice ID, e.g. `BFX-2026-0001.yaml`.
+- The file name is the notice ID, e.g. `BW-2026-0001.yaml`.
 
-Example: [`notices/pypi/pydantic-ai/BFX-2026-0001.yaml`](../notices/pypi/pydantic-ai/BFX-2026-0001.yaml)
+Example: [`notices/pypi/pydantic-ai/BW-2026-0001.yaml`](../notices/pypi/pydantic-ai/BW-2026-0001.yaml)
 
 The machine-readable definition is [`schema/notice-0.1.schema.json`](../schema/notice-0.1.schema.json)
 (JSON Schema, draft 2020-12). If this page and the schema disagree, the schema wins.
@@ -22,7 +22,7 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 | Field | Required | Meaning |
 |---|---|---|
 | `schema_version` | yes | Version of this format: `"0.1"`. |
-| `id` | yes | Unique ID `BFX-<year>-<number>`: the year it was published and a number with at least four digits, e.g. `BFX-2026-0001`. Never reused. |
+| `id` | yes | Unique ID `BW-<year>-<number>`: the year it was published and a number with at least four digits, e.g. `BW-2026-0001`. Never reused. |
 | `status` | yes | `draft` (not reviewed yet) or `verified` (checked by a maintainer against the official sources). |
 | `published` | yes | Date the notice was added, as `"YYYY-MM-DD"`. |
 | `modified` | no | Date of the last change to the notice, as `"YYYY-MM-DD"`. |
@@ -62,5 +62,6 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
 
 ## Changelog
 
-- **0.1** (2026-10-21): first version. Clarified the same day, before any other notice was added:
-  notices are plain YAML, without anchors, aliases or tags.
+- **0.1** (2026-10-21): first version. Changed the same day, before any other notice was added:
+  notices are plain YAML, without anchors, aliases or tags, and IDs start with `BW-`
+  (the project was renamed from bumpfix to Breakwise).
