@@ -1,6 +1,12 @@
-# Breakwise
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo/breakwise-logo-dark.svg">
+    <img alt="Breakwise" src="brand/logo/breakwise-logo.svg" height="44">
+  </picture>
+</h1>
 
-**An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
+**Know what an upgrade breaks before it breaks your code.**
+An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.
 
 > **Status: early.** This repository holds the notice format (v0.1) and the first notice.
 > The tool that finds and fixes affected code comes next. Contributions are welcome.
@@ -77,6 +83,7 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 |---|---|
 | [`notices/`](notices/) | The registry: one YAML file per breaking change |
 | [`docs/`](docs/) | Documentation, starting with the notice format |
+| [`brand/`](brand/) | The logo, colors, type and voice of Breakwise |
 | [`schema/`](schema/) | JSON Schema for notices |
 | [`tools/`](tools/) | Scripts that check notices and run their examples on real package versions |
 | [`tests/`](tests/) | Tests for those scripts |
