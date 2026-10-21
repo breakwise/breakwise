@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 import datetime as dt
+import email.message
+import http.client
+import io
+import json
+import os
+import shutil
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from typing import Any
 
 import pytest
 from packaging.version import Version
@@ -13,33 +24,141 @@ import verify_examples as ve
 
 UTC = dt.UTC
 REPO_ROOT = Path(__file__).resolve().parent.parent
+REAL_NOTICE = REPO_ROOT / "notices/pypi/pydantic-ai/BFX-2026-0001.yaml"
 PYTHON = Path(sys.executable)
+UPLOADED = dt.datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+posix_only = pytest.mark.skipif(not ve.POSIX, reason="the verifier runs on Linux and macOS")
 
 
 def releases(*versions: str) -> dict[Version, dt.datetime]:
-    upload = dt.datetime(2026, 1, 1, tzinfo=UTC)
-    return {Version(v): upload for v in versions}
+    return {Version(v): UPLOADED for v in versions}
 
 
-def plan(available: dict[Version, dt.datetime], breaks_in: str, works_since: str | None = None):
+def plan(
+    available: dict[Version, dt.datetime], breaks_in: str, works_since: str | None = None
+) -> list[tuple[str, str, bool]]:
     since = Version(works_since) if works_since else None
     checks = ve.plan_checks(available, Version(breaks_in), since)
     return [(str(c.version), c.example, c.should_run) for c in checks]
 
 
-def test_parse_releases_skips_yanked_and_empty_releases() -> None:
-    data = {
-        "1.0.0": [
-            {"upload_time_iso_8601": "2026-01-01T10:00:00.000000Z", "yanked": False},
-            {"upload_time_iso_8601": "2026-01-01T10:05:00.000000Z", "yanked": False},
-        ],
-        "1.1.0": [{"upload_time_iso_8601": "2026-02-01T10:00:00.000000Z", "yanked": True}],
-        "1.2.0": [],
-        "not-a-version": [{"upload_time_iso_8601": "2026-03-01T10:00:00Z", "yanked": False}],
-    }
-    assert ve.parse_releases(data) == {
+# --- PyPI ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("filename", "version"),
+    [
+        ("pydantic_ai-1.0.0-py3-none-any.whl", "1.0.0"),
+        ("pydantic_ai-1.0.0.tar.gz", "1.0.0"),
+        ("pydantic-ai-0.7.6.tar.gz", "0.7.6"),
+        ("demo-2.0.zip", "2.0"),
+        ("demo-1.0-py2.7.egg", None),
+        ("demo-1.0.exe", None),
+        ("demo-not.a.version.tar.gz", None),
+        ("demo-1.0-bad.whl", None),
+    ],
+)
+def test_version_of_reads_wheel_and_sdist_names(filename: str, version: str | None) -> None:
+    found = ve.version_of(filename)
+    assert (str(found) if found else None) == version
+
+
+def test_parse_files_keeps_the_latest_upload_of_each_release() -> None:
+    files: list[dict[str, Any]] = [
+        {"filename": "demo-1.0.0.tar.gz", "upload-time": "2026-01-01T10:00:00.000000Z"},
+        {"filename": "demo-1.0.0-py3-none-any.whl", "upload-time": "2026-01-01T10:05:00Z"},
+        {"filename": "demo-1.0-py2-none-any.whl", "upload-time": "2026-01-01T09:00:00Z"},
+        {"filename": "demo-1.1.0.tar.gz", "upload-time": "2026-02-01T10:00:00Z", "yanked": True},
+        {"filename": "demo-1.2.0.tar.gz", "upload-time": "2026-03-01T10:00:00Z", "yanked": "bug"},
+        {"filename": "demo-1.3.0.tar.gz", "upload-time": "2026-04-01T10:00:00Z", "yanked": False},
+        {"filename": "demo-1.4.0.tar.gz"},
+        {"filename": "demo-1.5.0-py2.7.egg", "upload-time": "2026-05-01T10:00:00Z"},
+    ]
+    assert ve.parse_files(files) == {
         Version("1.0.0"): dt.datetime(2026, 1, 1, 10, 5, tzinfo=UTC),
+        Version("1.3.0"): dt.datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
     }
+
+
+class FakePyPI:
+    """Stands in for urllib.request.urlopen: fails with the given errors, then answers."""
+
+    def __init__(self, *errors: Exception, body: bytes | None = None) -> None:
+        self.errors = list(errors)
+        self.body = body
+        self.calls = 0
+
+    def __call__(self, request: urllib.request.Request, timeout: float) -> io.BytesIO:
+        self.calls += 1
+        assert request.full_url == "https://pypi.org/simple/demo/"
+        assert request.get_header("Accept") == "application/vnd.pypi.simple.v1+json"
+        assert timeout == ve.PYPI_TIMEOUT
+        if self.errors:
+            raise self.errors.pop(0)
+        if self.body is not None:
+            return io.BytesIO(self.body)
+        files = [{"filename": "demo-1.0.0.tar.gz", "upload-time": "2026-01-01T12:00:00Z"}]
+        return io.BytesIO(json.dumps({"meta": {"api-version": "1.4"}, "files": files}).encode())
+
+
+def http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://pypi.org", code, "error", email.message.Message(), None)
+
+
+def test_fetch_releases_retries_until_pypi_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    pypi = FakePyPI(urllib.error.URLError("connection reset"), http_error(503), http_error(429))
+    monkeypatch.setattr(urllib.request, "urlopen", pypi)
+    waits: list[float] = []
+    assert ve.fetch_releases("demo", attempts=4, sleep=waits.append) == releases("1.0.0")
+    assert (pypi.calls, waits) == (4, [2.0, 4.0, 8.0])
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (http_error(502), "HTTP 502"),
+        (urllib.error.URLError("Name or service not known"), "Name or service not known"),
+        (TimeoutError(), "TimeoutError"),
+        (http.client.IncompleteRead(b"partial"), "IncompleteRead"),
+    ],
+)
+def test_fetch_releases_gives_up_after_the_last_attempt(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, reason: str
+) -> None:
+    pypi = FakePyPI(*[error] * 3)
+    monkeypatch.setattr(urllib.request, "urlopen", pypi)
+    waits: list[float] = []
+    with pytest.raises(ve.VerifyError) as raised:
+        ve.fetch_releases("demo", sleep=waits.append)
+    assert str(raised.value).startswith(f"Could not read demo from PyPI after 3 attempts: {reason}")
+    assert (pypi.calls, waits) == (3, [2.0, 4.0])
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [(404, "demo is not on PyPI."), (403, "PyPI refused the request for demo: HTTP 403.")],
+)
+def test_fetch_releases_does_not_retry_client_errors(
+    monkeypatch: pytest.MonkeyPatch, code: int, message: str
+) -> None:
+    pypi = FakePyPI(http_error(code))
+    monkeypatch.setattr(urllib.request, "urlopen", pypi)
+    with pytest.raises(ve.VerifyError) as raised:
+        ve.fetch_releases("demo", sleep=lambda _: None)
+    assert (str(raised.value), pypi.calls) == (message, 1)
+
+
+@pytest.mark.parametrize("body", [b"<html>not json</html>", b'{"meta": {}}', b'{"files": [1]}'])
+def test_fetch_releases_reports_unexpected_answers(
+    monkeypatch: pytest.MonkeyPatch, body: bytes
+) -> None:
+    monkeypatch.setattr(urllib.request, "urlopen", FakePyPI(body=body))
+    with pytest.raises(ve.VerifyError, match="PyPI sent an unexpected response for demo"):
+        ve.fetch_releases("demo")
+
+
+# --- Planning -----------------------------------------------------------------
 
 
 def test_plan_without_works_since() -> None:
@@ -79,7 +198,12 @@ def test_plan_does_not_repeat_versions() -> None:
 
 def test_plan_checks_a_pre_release_works_since_on_its_own() -> None:
     available = releases("1.0.0", "2.0.0b1", "2.0.0")
-    assert ("2.0.0b1", "after", True) in plan(available, "2.0.0", "2.0.0b1")
+    assert plan(available, "2.0.0", "2.0.0b1") == [
+        ("1.0.0", "before", True),
+        ("2.0.0", "before", False),
+        ("2.0.0", "after", True),
+        ("2.0.0b1", "after", True),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -100,72 +224,603 @@ def test_plan_reports_versions_it_cannot_use(
 def test_dependencies_are_cut_off_one_day_after_the_release() -> None:
     uploaded = dt.datetime(2025, 8, 20, 15, 31, 24, 123456, tzinfo=UTC)
     assert ve.exclude_newer(uploaded) == "2025-08-21T15:31:24Z"
+    in_riyadh = dt.datetime(2025, 8, 20, 18, 31, 24, tzinfo=dt.timezone(dt.timedelta(hours=3)))
+    assert ve.exclude_newer(in_riyadh) == "2025-08-21T15:31:24Z"
 
 
+# --- Installing ---------------------------------------------------------------
+
+FAKE_UV = """\
+#!{python}
+import os, sys
+from pathlib import Path
+
+with open(os.environ["FAKE_UV_LOG"], "a", encoding="utf-8") as log:
+    log.write(" ".join(sys.argv[1:]) + "\\n")
+if sys.argv[1] == "venv":
+    (Path(sys.argv[-1]) / "bin").mkdir(parents=True)
+elif os.environ.get("FAKE_UV_FAIL"):
+    sys.exit("No solution found when resolving dependencies")
+"""
+
+
+@pytest.fixture
+def fake_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Put a fake uv first on PATH. Return the file where it logs its arguments."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(FAKE_UV.format(python=sys.executable), encoding="utf-8")
+    uv.chmod(0o755)
+    log = tmp_path / "uv.log"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_UV_LOG", str(log))
+    return log
+
+
+@posix_only
+def test_install_pins_the_version_and_its_dependency_date(fake_uv: Path, tmp_path: Path) -> None:
+    target = tmp_path / "env"
+    interpreter = ve.install("demo", Version("1.2.3"), "2026-01-02T12:00:00Z", "python3", target)
+    assert interpreter == target / "bin" / "python"
+    venv_call, pip_call = fake_uv.read_text(encoding="utf-8").splitlines()
+    assert venv_call == f"venv --no-config --quiet --python python3 {target}"
+    assert pip_call == (
+        f"pip install --no-config --quiet --python {interpreter} "
+        "--exclude-newer 2026-01-02T12:00:00Z demo==1.2.3"
+    )
+
+
+@posix_only
+def test_install_reports_why_it_failed(
+    fake_uv: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_UV_FAIL", "1")
+    with pytest.raises(ve.VerifyError, match="No solution found"):
+        ve.install("demo", Version("1.0"), "2026-01-02T12:00:00Z", "python3", tmp_path / "env")
+
+
+def test_install_needs_uv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    with pytest.raises(ve.VerifyError, match="uv is not installed"):
+        ve.install("demo", Version("1.0"), "2026-01-02T12:00:00Z", "python3", tmp_path / "env")
+
+
+def test_install_steps_that_hang_are_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ve, "INSTALL_TIMEOUT", 0.5)
+    with pytest.raises(ve.VerifyError, match="Timed out: "):
+        ve._run_tool([sys.executable, "-c", "import time; time.sleep(10)"])
+
+
+# --- Running examples ---------------------------------------------------------
+
+
+@posix_only
+def test_the_exception_that_ends_an_example_is_recorded(tmp_path: Path) -> None:
+    code = "try:\n    1 / 0\nexcept ZeroDivisionError:\n    pass\nraise ImportError('no X here')\n"
+    run = ve.run_example(PYTHON, code, tmp_path)
+    assert (run.returncode, run.error, run.used_network) == (1, "ImportError: no X here\n", False)
+    assert run.summary == "ImportError: no X here"
+
+
+@posix_only
+def test_a_failure_on_a_line_that_mentions_the_old_name_is_not_enough(tmp_path: Path) -> None:
+    # The traceback quotes the failing line, so it contains the old name, but the error does not.
+    run = ve.run_example(PYTHON, "Old = 1\nprint(Old / 0)\n", tmp_path)
+    assert "Old" in run.stderr
+    result = ve.evaluate(ve.Check(Version("2.0"), "before", should_run=False), run, "Old")
+    assert (result.passed, result.detail) == (
+        False,
+        "fails, but not because of Old: ZeroDivisionError: division by zero",
+    )
+
+
+@posix_only
 def test_examples_cannot_use_the_network(tmp_path: Path) -> None:
     code = "import socket\nsocket.create_connection(('example.com', 80), timeout=5)\n"
     run = ve.run_example(PYTHON, code, tmp_path)
-    assert run.returncode != 0
+    assert run.used_network
+    assert ve.NETWORK_BLOCKED in run.error
     result = ve.evaluate(ve.Check(Version("1.0"), "after", should_run=True), run)
     assert not result.passed
-    assert "network" in result.detail
-
-
-def test_examples_cannot_look_up_hosts(tmp_path: Path) -> None:
-    run = ve.run_example(
-        PYTHON, "import socket\nsocket.getaddrinfo('example.com', 443)\n", tmp_path
+    assert result.detail.startswith(
+        "failed after it tried to use the network; examples must run offline: OSError: "
     )
-    assert ve.NETWORK_BLOCKED in run.stderr
 
 
+@posix_only
+@pytest.mark.parametrize(
+    "call",
+    [
+        "socket.getaddrinfo('example.com', 443)",
+        "socket.gethostbyname('example.com')",
+        "socket.gethostbyname_ex('example.com')",
+        "socket.socket().connect(('192.0.2.1', 80))",
+        "socket.socket().connect_ex(('192.0.2.1', 80))",
+    ],
+)
+def test_every_way_to_reach_the_network_is_blocked(tmp_path: Path, call: str) -> None:
+    run = ve.run_example(PYTHON, f"import socket\n{call}\n", tmp_path)
+    assert run.used_network
+    assert ve.NETWORK_BLOCKED in run.error
+
+
+@posix_only
+def test_network_use_is_caught_even_when_the_error_is_reworded(tmp_path: Path) -> None:
+    code = (
+        "import socket, sys\n"
+        "try:\n"
+        "    socket.create_connection(('example.com', 80))\n"
+        "except OSError:\n"
+        "    sys.exit('ImportError: cannot import name OpenAIModel')\n"
+    )
+    run = ve.run_example(PYTHON, code, tmp_path)
+    assert ve.NETWORK_BLOCKED not in run.stderr
+    result = ve.evaluate(ve.Check(Version("2.0"), "before", should_run=False), run, "OpenAIModel")
+    assert not result.passed
+    assert "tried to use the network" in result.detail
+
+
+@posix_only
+def test_a_blocked_call_that_the_example_ignores_is_reported_but_allowed(tmp_path: Path) -> None:
+    code = (
+        "import socket\ntry:\n    socket.getaddrinfo('example.com', 443)\nexcept OSError:\n    pass"
+    )
+    result = ve.evaluate(
+        ve.Check(Version("1.0"), "after", should_run=True), ve.run_example(PYTHON, code, tmp_path)
+    )
+    assert (result.passed, result.detail) == (
+        True,
+        "runs (a network call it made was blocked and ignored)",
+    )
+
+
+@posix_only
 def test_examples_get_fake_keys_and_no_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("BUMPFIX_TEST_SECRET", "do-not-leak")
     code = (
-        "import os\n"
+        "import os, sys\n"
         "assert 'BUMPFIX_TEST_SECRET' not in os.environ\n"
         f"assert os.environ['OPENAI_API_KEY'] == {ve.FAKE_KEY!r}\n"
+        f"assert os.environ['HOME'] == {str(tmp_path)!r}\n"
+        "assert sys.flags.isolated and sys.flags.utf8_mode\n"
     )
-    assert ve.run_example(PYTHON, code, tmp_path).returncode == 0
+    run = ve.run_example(PYTHON, code, tmp_path)
+    assert (run.returncode, run.stderr, run.used_network) == (0, "", False)
 
 
-def test_examples_that_hang_are_stopped(tmp_path: Path) -> None:
-    run = ve.run_example(PYTHON, "import time\ntime.sleep(30)\n", tmp_path, timeout=0.5)
+@posix_only
+def test_output_that_is_not_utf8_does_not_break_the_run(tmp_path: Path) -> None:
+    code = "import sys\nsys.stderr.buffer.write(b'bad \\xff byte\\n')\nsys.exit(3)\n"
+    run = ve.run_example(PYTHON, code, tmp_path)
+    assert (run.returncode, run.stderr, run.summary) == (3, "bad � byte\n", "SystemExit: 3")
+
+
+def _alive(pid: int) -> bool:
+    """Whether a process runs. A zombie, which has ended but was not collected yet, does not."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path(f"/proc/{pid}/stat")  # Linux only; the state follows the name in parentheses.
+    return not (stat.exists() and stat.read_text().rpartition(")")[2].split()[0] == "Z")
+
+
+def _wait_until_gone(pid: int, seconds: float = 5.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not _alive(pid)
+
+
+@posix_only
+def test_a_hanging_example_is_stopped_with_every_process_it_started(tmp_path: Path) -> None:
+    code = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "open('child.pid', 'w').write(str(child.pid))\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    run = ve.run_example(PYTHON, code, tmp_path, timeout=2)
     assert run.returncode is None
-    assert not ve.evaluate(ve.Check(Version("1.0"), "before", should_run=False), run).passed
+    assert time.monotonic() - started < 15
+    assert _wait_until_gone(int((tmp_path / "child.pid").read_text()))
+    result = ve.evaluate(ve.Check(Version("1.0"), "before", should_run=False), run)
+    assert (result.passed, result.detail) == (False, "did not finish in time, so it was stopped")
+
+
+@posix_only
+def test_a_process_that_leaves_the_group_cannot_hold_the_run_open(tmp_path: Path) -> None:
+    # The grandchild starts its own session, so it survives the kill and keeps stderr open.
+    escapee = (
+        "import os, time; os.setsid(); "
+        "open('escapee.pid', 'w').write(str(os.getpid())); time.sleep(30)"
+    )
+    code = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {escapee!r}])\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    try:
+        run = ve.run_example(PYTHON, code, tmp_path, timeout=1)
+        assert run.returncode is None
+        assert time.monotonic() - started < 1 + ve.STOPPED_OUTPUT_TIMEOUT + 5
+    finally:
+        pid_file = tmp_path / "escapee.pid"
+        if pid_file.exists():
+            os.kill(int(pid_file.read_text()), 9)
 
 
 @pytest.mark.parametrize(
-    ("should_run", "returncode", "passed", "detail"),
+    ("should_run", "returncode", "error", "expected_error", "passed", "detail"),
     [
-        (True, 0, True, "runs"),
-        (True, 1, False, "should run, but failed: ImportError: cannot import name 'X'"),
-        (False, 1, True, "fails as expected: ImportError: cannot import name 'X'"),
-        (False, 0, False, "should fail on this version, but it ran"),
+        (True, 0, "", None, True, "runs"),
+        (True, 1, "ImportError: X\n", None, False, "should run, but failed: ImportError: X"),
+        (False, 0, "", None, False, "should fail on this version, but it ran"),
+        (False, 1, "TypeError: f() got 2\n", None, True, "fails as expected: TypeError: f() got 2"),
+        (
+            False,
+            1,
+            "ImportError: cannot import name 'OpenAIModel'\n",
+            "OpenAIModel",
+            True,
+            "fails as expected: ImportError: cannot import name 'OpenAIModel'",
+        ),
+        (
+            False,
+            1,
+            "ZeroDivisionError: division by zero\n",
+            "OpenAIModel",
+            False,
+            "fails, but not because of OpenAIModel: ZeroDivisionError: division by zero",
+        ),
     ],
 )
-def test_evaluate(should_run: bool, returncode: int, passed: bool, detail: str) -> None:
+def test_evaluate(
+    should_run: bool,
+    returncode: int,
+    error: str,
+    expected_error: str | None,
+    passed: bool,
+    detail: str,
+) -> None:
     check = ve.Check(Version("2.0.0"), "before", should_run=should_run)
-    stderr = "Traceback (most recent call last):\nImportError: cannot import name 'X'\n"
-    result = ve.evaluate(check, ve.Run(returncode, stderr if returncode else ""))
+    result = ve.evaluate(check, ve.Run(returncode, "", error), expected_error)
     assert (result.passed, result.detail) == (passed, detail)
+
+
+def test_run_summary_is_one_short_line() -> None:
+    assert ve.Run(1).summary == "exit code 1"
+    assert ve.Run(1, "Traceback\n  line\nValueError: x\n\n").summary == "ValueError: x"
+    assert ve.Run(1, "ignored\n", "KeyError: 'a'\nnote\n").summary == "KeyError: 'a'"
+    assert ve.Run(1, "E" * 300).summary == "E" * 197 + "..."
+    assert ve.Run(1, "E" * 200).summary == "E" * 200
+
+
+# --- A whole notice, offline --------------------------------------------------
+
+FAKE_VERSIONS = {
+    "1.0.0": "class Old: pass\n",
+    "1.5.0": "class Old: pass\nclass New: pass\n",
+    "1.9.0": "class Old: pass\nclass New: pass\n",
+    "2.0.0": "class New: pass\n",
+}
+
+FAKE_NOTICE = """\
+---
+schema_version: "0.1"
+id: BFX-2026-9001
+status: draft
+published: "2026-10-21"
+package:
+  ecosystem: PyPI
+  name: fakelib
+type: rename
+breaks_in: "{breaks_in}"
+works_since: "{works_since}"
+summary: Old was renamed to New, and the old name was removed in 2.0.0.
+rename:
+  from: fakelib.Old
+  to: fakelib.New
+example:
+  before: |
+    from fakelib import Old
+
+    Old()
+  after: |
+    from fakelib import New
+
+    New()
+references:
+  - https://example.com/changelog
+"""
+
+
+class FakeIndex:
+    """Installs a tiny package called fakelib whose contents depend on the version."""
+
+    def __init__(self) -> None:
+        self.installed: list[tuple[str, str, str]] = []
+
+    def releases(self, name: str) -> dict[Version, dt.datetime]:
+        assert name == "fakelib"
+        return releases(*FAKE_VERSIONS)
+
+    def install(
+        self, package: str, version: Version, cutoff: str, python: str, target: Path
+    ) -> Path:
+        self.installed.append((package, str(version), cutoff))
+        subprocess.run([python, "-m", "venv", "--without-pip", str(target)], check=True)
+        site = target / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        (site / "site-packages" / "fakelib.py").write_text(FAKE_VERSIONS[str(version)])
+        return target / "bin" / "python"
+
+
+def write_notice(tmp_path: Path, breaks_in: str = "2.0.0", works_since: str = "1.5.0") -> Path:
+    notice = tmp_path / "BFX-2026-9001.yaml"
+    text = FAKE_NOTICE.format(breaks_in=breaks_in, works_since=works_since)
+    notice.write_text(text, encoding="utf-8")
+    return notice
+
+
+def verify(notice: Path, index: FakeIndex) -> list[str]:
+    results = ve.verify_notice(
+        notice, sys.executable, fetch=index.releases, installer=index.install
+    )
+    return [
+        f"{'ok' if r.passed else 'FAIL'} {r.check.version} {r.check.example}: {r.detail}"
+        for r in results
+    ]
+
+
+@posix_only
+def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
+    index = FakeIndex()
+    site = f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
+    assert verify(write_notice(tmp_path), index) == [
+        "ok 1.9.0 before: runs",
+        "ok 1.9.0 after: runs",
+        (
+            "ok 2.0.0 before: fails as expected: ImportError: cannot import name 'Old' "
+            f"from 'fakelib' (<tmp>/venv-2.0.0/{site}/fakelib.py)"
+        ),
+        "ok 2.0.0 after: runs",
+        "ok 1.5.0 after: runs",
+    ]
+    # One environment per version, each with dependencies as of a day after the upload.
+    assert index.installed == [
+        ("fakelib", "1.9.0", "2026-01-02T12:00:00Z"),
+        ("fakelib", "2.0.0", "2026-01-02T12:00:00Z"),
+        ("fakelib", "1.5.0", "2026-01-02T12:00:00Z"),
+    ]
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("breaks_in", "works_since", "failure"),
+    [
+        ("1.9.0", "1.5.0", "FAIL 1.9.0 before: should fail on this version, but it ran"),
+        ("2.0.0", "1.0.0", "FAIL 1.0.0 after: should run, but failed: ImportError"),
+    ],
+)
+def test_a_notice_with_wrong_versions_fails(
+    tmp_path: Path, breaks_in: str, works_since: str, failure: str
+) -> None:
+    lines = verify(write_notice(tmp_path, breaks_in, works_since), FakeIndex())
+    failures = [line for line in lines if line.startswith("FAIL")]
+    assert len(failures) == 1
+    assert failures[0].startswith(failure)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (("ecosystem: PyPI", "ecosystem: npm"), "line 7: package.ecosystem: 'npm' is not one of"),
+        (('breaks_in: "2.0.0"', 'breaks_in: "two"'), "line 10: breaks_in: 'two' is not valid"),
+        (('published: "2026-10-21"', "published: 2026-02-30"), "line 5: Write 2026-02-30 in"),
+        (("example:", "examples:"), "line 2: 'example' is a required property"),
+    ],
+)
+def test_only_valid_notices_are_verified(
+    tmp_path: Path, change: tuple[str, str], message: str
+) -> None:
+    notice = write_notice(tmp_path)
+    notice.write_text(notice.read_text(encoding="utf-8").replace(*change), encoding="utf-8")
+    with pytest.raises(ve.VerifyError) as raised:
+        ve.verify_notice(notice, sys.executable, fetch=FakeIndex().releases)
+    assert str(raised.value).startswith(f"The notice is not valid ({message}")
+    assert str(raised.value).endswith(". Run tools/validate_notices.py.")
+
+
+@posix_only
+def test_any_failure_counts_for_changes_other_than_renames(tmp_path: Path) -> None:
+    notice = write_notice(tmp_path)
+    text = notice.read_text(encoding="utf-8").replace("type: rename", "type: removal")
+    text = text.replace(
+        "rename:\n  from: fakelib.Old\n  to: fakelib.New\n", "instructions: Use New instead.\n"
+    )
+    notice.write_text(text, encoding="utf-8")
+    lines = verify(notice, FakeIndex())
+    assert [line.split(":")[0] for line in lines] == [
+        "ok 1.9.0 before",
+        "ok 1.9.0 after",
+        "ok 2.0.0 before",
+        "ok 2.0.0 after",
+        "ok 1.5.0 after",
+    ]
+
+
+# --- Choosing notices ---------------------------------------------------------
+
+
+def git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True)
+    return completed.stdout.strip()
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "user.name", "Test")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "commit.gpgsign", "false")
+    return tmp_path
+
+
+def commit(repo: Path, message: str, **files: str) -> None:
+    for name, text in files.items():
+        (repo / name).write_text(text, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+
+
+def test_changed_files_handles_unusual_file_names(git_repo: Path) -> None:
+    commit(git_repo, "base", **{"README.md": "one\n", "old.txt": "old\n"})
+    base = git(git_repo, "rev-parse", "HEAD")
+
+    unusual = git_repo / "notices" / "pypi" / "démo lib" / "BFX-2026-0002.yaml"
+    unusual.parent.mkdir(parents=True)
+    unusual.write_text("id: x\n", encoding="utf-8")
+    (git_repo / "old.txt").unlink()
+    commit(git_repo, "change", **{"README.md": "two\n"})
+
+    assert sorted(ve.changed_files(git_repo, base)) == [
+        "README.md",
+        "notices/pypi/démo lib/BFX-2026-0002.yaml",
+    ]
+    with pytest.raises(ve.VerifyError, match="git diff against no-such-ref failed"):
+        ve.changed_files(git_repo, "no-such-ref")
+
+
+def test_changed_files_ignores_changes_made_on_the_base_branch(git_repo: Path) -> None:
+    commit(git_repo, "base", **{"a.txt": "a\n"})
+    git(git_repo, "checkout", "-q", "-b", "feature")
+    commit(git_repo, "feature", **{"feature.txt": "f\n"})
+    git(git_repo, "checkout", "-q", "main")
+    commit(git_repo, "main moved on", **{"main.txt": "m\n"})
+    git(git_repo, "checkout", "-q", "feature")
+    assert ve.changed_files(git_repo, "main") == ["feature.txt"]
+
+
+def test_changed_files_needs_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    with pytest.raises(ve.VerifyError, match="git is not installed"):
+        ve.changed_files(REPO_ROOT, "HEAD")
+
+
+def test_all_notices_skips_markdown_and_hidden_files(tmp_path: Path) -> None:
+    for name in ("notices/pypi/a/BFX-2026-0001.yaml", "notices/LICENSE.md", "notices/.x/B.yaml"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("x\n", encoding="utf-8")
+    assert ve.all_notices(tmp_path) == [tmp_path / "notices/pypi/a/BFX-2026-0001.yaml"]
 
 
 def test_all_notices_are_verified_when_the_tooling_changes() -> None:
     every = ve.all_notices(REPO_ROOT)
-    assert ve.notices_to_verify(REPO_ROOT, ["tools/verify_examples.py"]) == every
-    assert ve.notices_to_verify(REPO_ROOT, ["requirements-dev.txt", "README.md"]) == every
+    for tool in sorted(ve.RUN_ALL_WHEN_CHANGED):
+        assert ve.notices_to_verify(REPO_ROOT, [tool, "README.md"]) == every
 
 
 def test_only_changed_notices_are_verified_otherwise() -> None:
     notice = "notices/pypi/pydantic-ai/BFX-2026-0001.yaml"
     assert ve.notices_to_verify(REPO_ROOT, [notice, "README.md"]) == [REPO_ROOT / notice]
     assert ve.notices_to_verify(REPO_ROOT, ["README.md", "notices/LICENSE.md"]) == []
+    assert ve.notices_to_verify(REPO_ROOT, ["docs/notices/x.yaml"]) == []
 
 
-def test_main_needs_exactly_one_kind_of_target() -> None:
-    with pytest.raises(SystemExit):
-        ve.main([])
-    with pytest.raises(SystemExit):
-        ve.main(["--all", "--changed-since", "origin/main"])
+# --- Command line -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("argv", [[], ["--all", "--changed-since", "origin/main"], ["x", "--all"]])
+def test_main_needs_exactly_one_kind_of_target(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as raised:
+        ve.main(argv)
+    assert raised.value.code == 2
+
+
+def test_main_refuses_to_run_outside_posix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(ve, "POSIX", False)
+    assert ve.main(["--all"]) == 1
+    assert capsys.readouterr().out == "FAIL  tools/verify_examples.py runs on Linux and macOS.\n"
+
+
+@posix_only
+def test_main_reports_missing_files(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ve.main(["no/such/notice.yaml"]) == 1
+    assert capsys.readouterr().out.startswith("FAIL  Not found: ")
+
+
+@posix_only
+def test_main_says_when_there_is_nothing_to_verify(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(ve, "changed_files", lambda root, ref: ["README.md"])
+    assert ve.main(["--changed-since", "origin/main"]) == 0
+    assert capsys.readouterr().out == "No notices to verify.\n"
+
+
+@posix_only
+@pytest.mark.parametrize("in_github", [True, False])
+def test_main_prints_results_and_annotations(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], in_github: bool
+) -> None:
+    def fake_verify(path: Path, python: str) -> list[ve.Result]:
+        return [
+            ve.Result(ve.Check(Version("1.0"), "before", should_run=True), True, "runs"),
+            ve.Result(ve.Check(Version("2.0"), "before", should_run=False), False, "it ran"),
+        ]
+
+    monkeypatch.setattr(ve, "verify_notice", fake_verify)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true" if in_github else "false")
+    assert ve.main(["--all"]) == 1
+    out = capsys.readouterr().out
+    rel = REAL_NOTICE.relative_to(REPO_ROOT).as_posix()
+    assert (
+        f"\n{rel}\n  ok    1.0  example.before: runs\n  FAIL  2.0  example.before: it ran\n" in out
+    )
+    assert (f"::error file={rel}::2.0  example.before: it ran\n" in out) is in_github
+    assert out.count("::error") == int(in_github)
+    assert out.endswith("\n1 check(s) failed.\n")
+
+
+@posix_only
+@pytest.mark.parametrize("in_github", [True, False])
+def test_main_counts_notices_that_cannot_be_verified(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], in_github: bool
+) -> None:
+    def broken(path: Path, python: str) -> list[ve.Result]:
+        raise ve.VerifyError("demo is not on PyPI.")
+
+    monkeypatch.setattr(ve, "verify_notice", broken)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true" if in_github else "false")
+    assert ve.main(["--all"]) == 1
+    out = capsys.readouterr().out
+    rel = REAL_NOTICE.relative_to(REPO_ROOT).as_posix()
+    assert "  FAIL  demo is not on PyPI.\n" in out
+    assert (f"::error file={rel}::demo is not on PyPI.\n" in out) is in_github
+
+
+@posix_only
+def test_main_succeeds_when_every_check_passes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    def fine(path: Path, python: str) -> list[ve.Result]:
+        assert python == "/usr/bin/python-for-examples"
+        return [ve.Result(ve.Check(Version("1.0"), "before", should_run=True), True, "runs")]
+
+    monkeypatch.setattr(ve, "verify_notice", fine)
+    outside = tmp_path / "notice.yaml"
+    outside.write_text("x\n", encoding="utf-8")
+    argv = [str(REAL_NOTICE), str(outside), "--python", "/usr/bin/python-for-examples"]
+    assert ve.main(argv) == 0
+    out = capsys.readouterr().out
+    # Notices in the repository are shown by their path in it, others by their full path.
+    assert f"\n{REAL_NOTICE.relative_to(REPO_ROOT).as_posix()}\n" in out
+    assert f"\n{outside.as_posix()}\n" in out
+    assert out.endswith("\nAll examples behave as their notices say (2 notice(s)).\n")

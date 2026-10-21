@@ -6,12 +6,81 @@ pythonpath = ["tools"]
 addopts = ["-ra", "--strict-markers", "--strict-config"]
 filterwarnings = ["error"]
 
+[tool.coverage.run]
+branch = true
+source = ["tools"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "tools"
+files = ["tools", "tests"]
+warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code",
+    "possibly-undefined",
+    "redundant-expr",
+    "truthy-bool",
+    "truthy-iterable",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+select = [
+    "A",    # shadowed builtins
+    "ARG",  # unused arguments
+    "B",    # likely bugs
+    "BLE",  # blind except
+    "C4",   # comprehensions
+    "C90",  # complexity
+    "DTZ",  # dates without time zones
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "FURB", # modern idioms
+    "I",    # import order
+    "ISC",  # implicit string concatenation
+    "N",    # naming
+    "PERF", # performance
+    "PGH",  # blanket noqa and type: ignore
+    "PIE",
+    "PL",   # pylint
+    "PT",   # pytest style
+    "PTH",  # pathlib
+    "RET",  # return statements
+    "RUF",  # ruff
+    "S",    # security
+    "SIM",  # simplifications
+    "SLF",  # private access
+    "TRY",  # exception handling
+    "UP",   # pyupgrade
+    "W",    # pycodestyle warnings
+]
+# Messages are written where the error is raised, which keeps them readable.
+ignore = ["TRY003"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "ARG",     # fakes take the arguments of what they replace
+    "PLR0913", # parametrized tests take many arguments
+    "PLR0917", # and take them by position
+    "PLR2004", # expected values are written inline
+    "S101",    # pytest uses assert
+    "S603",    # tests run subprocesses with fixed arguments
+    "S607",    # and find git on PATH
+    "SLF001",  # tests may call private helpers
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["validate_notices", "verify_examples"]

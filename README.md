@@ -99,17 +99,20 @@ New notices start as `draft` until a maintainer verifies them.
 
 ## Development
 
-Run the main checks locally with Python 3.12 or later:
+Run the main checks locally with Python 3.12 or later, on Linux or macOS:
 
 ```sh
 python -m pip install --require-hashes -r requirements-dev.txt
-python -m pytest
+ruff check . && ruff format --check .
+mypy
+python -m pytest --cov
 python tools/validate_notices.py
 python tools/verify_examples.py --all
 ```
 
+The tests must cover every line and branch of `tools/`.
 `tools/verify_examples.py` installs real package versions from PyPI, so it needs network access.
-The pull request checks also run ruff, yamllint and markdownlint;
+The pull request checks also lint YAML, Markdown and the workflows;
 see [`.github/workflows/checks.yml`](.github/workflows/checks.yml).
 
 ## License

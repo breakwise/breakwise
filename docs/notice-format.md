@@ -39,7 +39,8 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 | `references` | yes | `https` links to official sources: changelog, migration guide, release notes or source code. |
 
 Versions follow the package's own scheme ([PEP 440](https://peps.python.org/pep-0440/) for PyPI)
-and are always quoted, e.g. `"2.0.0"`, so YAML keeps them as text. The same applies to dates.
+and are always quoted, e.g. `"2.0.0"`, so YAML keeps them as text: unquoted, `2.10` would become
+the number 2.1. The same applies to dates. Notices are plain YAML, without anchors, aliases or tags.
 
 ## Rules
 
@@ -50,14 +51,16 @@ and are always quoted, e.g. `"2.0.0"`, so YAML keeps them as text. The same appl
    with the old name in `example.before` and only the new name in `example.after`.
    Use `instructions` only when a person has to decide.
 4. **Tested examples.** On every pull request, `tools/verify_examples.py` installs real versions from PyPI
-   and checks that `example.before` runs on the last release before `breaks_in` and fails on `breaks_in`,
+   and checks that `example.before` runs on the last stable release before `breaks_in` and fails on `breaks_in`,
    and that `example.after` runs on `breaks_in` and on `works_since`.
+   For a `rename`, the error that stops `example.before` must name the old name.
 5. **Offline examples.** Examples run without network access and with fake API keys,
-   so they must not call real services. For a `behavior` change, use `assert`
-   so that the example fails when the behavior differs.
+   so they must not call real services: an example that fails after trying to reach the network fails the check.
+   For a `behavior` change, use `assert` so that the example fails when the behavior differs.
 6. **New notices start as `draft`.** A maintainer checks them against the sources and sets `verified`.
 7. **IDs:** take the next free number. A maintainer fixes any clash when merging.
 
 ## Changelog
 
-- **0.1** (2026-10-21): first version.
+- **0.1** (2026-10-21): first version. Clarified the same day, before any other notice was added:
+  notices are plain YAML, without anchors, aliases or tags.

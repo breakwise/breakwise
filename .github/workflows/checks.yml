@@ -35,14 +35,30 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-      - name: Test the tools
-        run: python -m pytest
+      - name: Check types
+        run: mypy
+      - name: Test the tools, with full branch coverage
+        run: python -m pytest --cov
       - name: Validate notices
         run: python tools/validate_notices.py
       - name: Lint YAML
         run: yamllint --strict .
       - name: Lint Markdown
         run: npx --yes markdownlint-cli2@0.18.1 "**/*.md"
+      - name: Lint workflows
+        env:
+          # actionlint is not on PyPI as a wheel, so its release is downloaded and checked.
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          release="https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION"
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            "$release/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"
+          zizmor --offline .github/workflows
 
   examples:
     name: Verify examples
@@ -52,6 +68,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          # For a pull request, its own last commit rather than a merge with the base branch,
+          # so that the files it changed are found even after the base branch moves on.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -62,10 +81,10 @@ jobs:
       - name: Verify examples on real package versions
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            python tools/verify_examples.py --changed-since "origin/$BASE_REF"
+            python tools/verify_examples.py --changed-since "$BASE_SHA"
           else
             python tools/verify_examples.py --all
           fi
