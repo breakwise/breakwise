@@ -22,6 +22,7 @@
       "const": "0.1"
     },
     "id": {
+      "description": "an ID like BFX-2026-0001: the year it was published, then a number with at least four digits.",
       "type": "string",
       "pattern": "^BFX-[0-9]{4}-[0-9]{4,}$"
     },
@@ -106,6 +107,7 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {
+        "description": "an https:// link.",
         "type": "string",
         "pattern": "^https://[^\\s]+$"
       }
@@ -128,21 +130,22 @@
   ],
   "$defs": {
     "date": {
+      "description": "a date written as \"YYYY-MM-DD\".",
       "type": "string",
       "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
     },
     "package_name": {
-      "description": "Normalized PyPI name: lowercase letters and digits, words joined by single hyphens.",
+      "description": "a normalized PyPI name: lowercase letters and digits, words joined by single hyphens.",
       "type": "string",
       "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
     },
     "version": {
-      "description": "A PEP 440 public version, e.g. 2.0.0, 1.0.0rc1, 2.1.0.post1.",
+      "description": "a PEP 440 public version, e.g. 2.0.0, 1.0.0rc1 or 2.1.0.post1.",
       "type": "string",
       "pattern": "^[0-9]+(\\.[0-9]+)*((a|b|rc)[0-9]+)?(\\.post[0-9]+)?(\\.dev[0-9]+)?$"
     },
     "dotted_name": {
-      "description": "A Python import path, e.g. pydantic_ai.models.openai.OpenAIModel.",
+      "description": "a Python import path, e.g. pydantic_ai.models.openai.OpenAIModel.",
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"
     }

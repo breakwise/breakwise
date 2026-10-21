@@ -78,12 +78,15 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 | [`notices/`](notices/) | The registry: one YAML file per breaking change |
 | [`docs/`](docs/) | Documentation, starting with the notice format |
 | [`schema/`](schema/) | JSON Schema for notices |
+| [`tools/`](tools/) | Scripts that check notices and run their examples on real package versions |
+| [`tests/`](tests/) | Tests for those scripts |
+| [`.github/workflows/`](.github/workflows/) | The checks that run on every pull request |
 
 ## Roadmap
 
 - [x] Notice format v0.1 and its JSON Schema
+- [x] Check every notice and run its examples on real package versions, on each pull request
 - [ ] First notices for pydantic-ai, LangChain and the OpenAI Python SDK
-- [ ] Check every notice automatically on each pull request
 - [ ] CLI: scan a repository for affected code
 - [ ] CLI: apply fixes, run tests, open a pull request
 - [ ] MCP server for AI coding agents
@@ -93,6 +96,21 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 Did an upgrade break your code? Open an issue with the package name, the version and a link to the changelog,
 or add a notice yourself in a pull request following [docs/notice-format.md](docs/notice-format.md).
 New notices start as `draft` until a maintainer verifies them.
+
+## Development
+
+Run the main checks locally with Python 3.12 or later:
+
+```sh
+python -m pip install --require-hashes -r requirements-dev.txt
+python -m pytest
+python tools/validate_notices.py
+python tools/verify_examples.py --all
+```
+
+`tools/verify_examples.py` installs real package versions from PyPI, so it needs network access.
+The pull request checks also run ruff, yamllint and markdownlint;
+see [`.github/workflows/checks.yml`](.github/workflows/checks.yml).
 
 ## License
 

@@ -1,0 +1,71 @@
+---
+name: checks
+
+"on":
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Every Monday, so that changes on PyPI, such as yanked releases, are noticed.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Validate notices
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Lint Python
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Test the tools
+        run: python -m pytest
+      - name: Validate notices
+        run: python tools/validate_notices.py
+      - name: Lint YAML
+        run: yamllint --strict .
+      - name: Lint Markdown
+        run: npx --yes markdownlint-cli2@0.18.1 "**/*.md"
+
+  examples:
+    name: Verify examples
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Verify examples on real package versions
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            python tools/verify_examples.py --changed-since "origin/$BASE_REF"
+          else
+            python tools/verify_examples.py --all
+          fi
