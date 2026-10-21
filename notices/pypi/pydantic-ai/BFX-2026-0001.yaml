@@ -1,0 +1,29 @@
+---
+schema_version: "0.1"
+id: BFX-2026-0001
+status: verified
+published: "2026-10-21"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0"
+works_since: "0.7.6"
+summary: OpenAIModel was renamed to OpenAIChatModel, and the old name was removed in 2.0.0.
+rename:
+  from: pydantic_ai.models.openai.OpenAIModel
+  to: pydantic_ai.models.openai.OpenAIChatModel
+example:
+  before: |
+    from pydantic_ai.models.openai import OpenAIModel
+
+    model = OpenAIModel("gpt-5")
+  after: |
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    model = OpenAIChatModel("gpt-5")
+references:
+  - https://pydantic.dev/docs/ai/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.6/pydantic_ai_slim/pydantic_ai/models/openai.py
