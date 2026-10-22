@@ -1,5 +1,7 @@
-# Tools for checking the registry. After editing, regenerate requirements-dev.txt:
+# Tools for checking the registry and building the package. After editing, regenerate requirements-dev.txt:
 #   uv pip compile requirements-dev.in --universal --python-version 3.12 --generate-hashes -o requirements-dev.txt
+build
+hatchling
 jsonschema
 mypy
 packaging

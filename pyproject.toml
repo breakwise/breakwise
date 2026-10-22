@@ -1,14 +1,60 @@
-# Settings for the development tools. The Breakwise package itself is not defined yet.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "breakwise"
+dynamic = ["version"]
+description = "Tested notices of breaking changes in Python libraries, and the tools that apply them."
+readme = "docs/pypi.md"
+requires-python = ">=3.12"
+# The code is Apache-2.0, and the notices that come with it are CC BY 4.0.
+license = "Apache-2.0 AND CC-BY-4.0"
+license-files = ["LICENSE", "notices/LICENSE.md"]
+dependencies = ["pyyaml>=6.0.1"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Repository = "https://github.com/breakwise/breakwise"
+Documentation = "https://github.com/breakwise/breakwise/tree/main/docs"
+Issues = "https://github.com/breakwise/breakwise/issues"
+
+[project.scripts]
+breakwise = "breakwise.cli:main"
+
+[tool.hatch.version]
+path = "src/breakwise/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "notices", "docs/pypi.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/breakwise"]
+
+# The notices go into the package, next to where the index will go later.
+[tool.hatch.build.targets.wheel.force-include]
+"notices" = "breakwise/data/notices"
+
+# Settings for the development tools.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["tools"]
+pythonpath = ["tools", "src"]
 addopts = ["-ra", "--strict-markers", "--strict-config"]
 filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["tools"]
+source = ["tools", "src"]
 
 [tool.coverage.report]
 fail_under = 100
@@ -19,8 +65,8 @@ exclude_also = ['if __name__ == "__main__":']
 [tool.mypy]
 strict = true
 python_version = "3.12"
-mypy_path = "tools"
-files = ["tools", "tests"]
+mypy_path = "tools,src"
+files = ["tools", "src", "tests"]
 warn_unreachable = true
 enable_error_code = [
     "ignore-without-code",
@@ -83,4 +129,4 @@ max-complexity = 10
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["validate_notices", "verify_examples"]
+known-first-party = ["breakwise", "validate_notices", "verify_examples"]
