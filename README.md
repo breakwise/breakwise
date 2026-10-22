@@ -35,7 +35,7 @@ On top of the registry, the Breakwise tool will:
 1. read the notices that apply to your dependencies,
 2. find the affected code in your repository,
 3. apply the fix and run your tests,
-4. open a pull request for you to review. It never merges on its own.
+4. propose the change for you to review, as a diff, a comment or a pull request. It never merges on its own.
 
 AI coding agents will be able to query the registry through an MCP server.
 
@@ -82,7 +82,7 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 | Path | Contents |
 | --- | --- |
 | [`notices/`](notices/) | The registry: one YAML file per breaking change |
-| [`docs/`](docs/) | Documentation, starting with the notice format |
+| [`docs/`](docs/) | Documentation: the [notice format](docs/notice-format.md) and the [architecture](docs/architecture.md) |
 | [`schema/`](schema/) | JSON Schema for notices |
 | [`tools/`](tools/) | Scripts that check notices and run their examples on real package versions |
 | [`tests/`](tests/) | Tests for those scripts |
@@ -92,10 +92,15 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 
 - [x] Notice format v0.1 and its JSON Schema
 - [x] Check every notice and run its examples on real package versions, on each pull request
-- [ ] First notices for pydantic-ai, LangChain and the OpenAI Python SDK
-- [ ] CLI: scan a repository for affected code
-- [ ] CLI: apply fixes, run tests, open a pull request
+- [ ] Format v0.2, the pydantic-ai V2 notices and a published index, with a first release on PyPI that has `breakwise explain`
+- [ ] `breakwise scan`: report the code that an upgrade breaks
 - [ ] MCP server for AI coding agents
+- [ ] `breakwise fix`: apply tested fixes, alone or in a two-step upgrade
+- [ ] GitHub Action that comments tested fixes on Dependabot and Renovate pull requests
+- [ ] Draft generator for new notices, and an agent for changes that need a person
+
+Notices for LangChain and the OpenAI Python SDK start after the first open step and continue alongside the others.
+The phases, and why Breakwise is built this way, are in [docs/architecture.md](docs/architecture.md).
 
 ## Contributing
 
