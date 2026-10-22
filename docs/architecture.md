@@ -86,7 +86,7 @@ Clients never read YAML from git. On every push to `main`, CI builds an index an
 - The build is deterministic: keys and files are sorted, and the only date it records is the commit's.
 - A separate job publishes the files with GitHub Pages and attaches a build provenance attestation, so anyone can check that a file came from this repository's workflow. That job has only the permissions publishing needs, and it runs nothing from pull requests.
 - The index has its own format version in its path (`v1`). A change that breaks clients gets a new path, and the old one stays available.
-- The URL of the index is part of the public interface. It should be on the project's own domain before the engine's first release, so that the host can change later without breaking installed clients.
+- The URL of the index is part of the public interface. It should be on the project's own domain before the first release that downloads it, so that the host can change later without breaking installed clients.
 - Every file carries the data license (CC BY 4.0) and the attribution text, and the tools show the attribution in their reports.
 
 ## Engine (Next)
@@ -123,7 +123,7 @@ This is also a rule for authors, which format v0.2 adds to [docs/notice-format.m
 
 ### Command line (Next)
 
-- `breakwise explain BW-2026-0001` shows a notice. It comes first, in the release at the end of phase 1.
+- `breakwise explain BW-2026-0001` shows a notice. It comes first, in the release that opens phase 1, and works offline from the notices bundled with the package.
 - `breakwise scan` reports the code that an upgrade breaks and changes nothing. Its exit code says whether anything applies, so CI can use it as a check.
 - `breakwise fix` (Planned) shows the diff of the certain fixes, then writes it when the user confirms or passes `--write`.
 - `breakwise upgrade pydantic-ai` (Planned) runs the two-step upgrade, with the project's tests after each step.
@@ -186,7 +186,7 @@ When the engine starts, the notice model that the validator and the verifier sha
 
 - **Security.** For clients, the index is untrusted input: the engine checks every file against the manifest's SHA-256 and the index schema before using it. The SHA-256 only shows that a file matches the manifest it came with, not that both came from this repository: whoever controls the host could replace both. The build provenance attestation shows where they came from, and the engine verifies it before phase 4, when automatic fixes start writing to people's code. Dependencies are pinned with hashes, actions by commit SHA, and releases are published with Trusted Publishing and attestations.
 - **Versioning.** The notice format may change before 1.0, with every change in its changelog. From 1.0, a change that breaks readers needs a new major version. The index versions its path, and the engine follows semantic versioning, including the schema of its JSON output.
-- **Offline use.** Each release of the package bundles the index as it was at release time. The engine refreshes it at most once a day, and falls back to its cache or the bundled copy when it can't.
+- **Offline use.** Each release of the package bundles the notices as they were at release time. Once the index is published, the engine refreshes them from it at most once a day, and falls back to its cache or the bundled copy when it can't.
 - **Performance.** Each file is parsed once, files are processed in parallel, and results are cached by file content, so a second scan of an unchanged project is almost instant.
 - **Quality.** The engine keeps the bar of the registry tools: ruff, mypy in strict mode, full line and branch coverage, and mutation testing for the transforms, plus before-and-after files for every fix.
 - **Attribution.** The notices are CC BY 4.0, so every report credits the Breakwise registry and links to the notice.
@@ -215,7 +215,7 @@ When the engine starts, the notice model that the validator and the verifier sha
 | Phase | Delivers | Done when |
 | --- | --- | --- |
 | 0. Foundation | Format v0.1, the validator, the verifier and CI | Done: BW-2026-0001 passes every check |
-| 1. Registry | Format v0.2, the pydantic-ai V2 notices (#5), the published index, and a first release on PyPI with `breakwise explain` | The index lists every pydantic-ai V2 notice, and `pip install breakwise` gives `breakwise explain` |
+| 1. Registry | A first release on PyPI with `breakwise explain`, then format v0.2, the pydantic-ai V2 notices (#5) and the published index | `pip install breakwise` gives `breakwise explain`, and the index lists every pydantic-ai V2 notice |
 | 2. Scan | The engine's project, plan and analysis steps, and `breakwise scan` (#6) | On a sample project, `scan` reports every line that pydantic-ai 2.0 breaks |
 | 3. MCP | The MCP server with read-only tools | An agent finds and explains the notices for an upgrade |
 | 4. Fix | Rename and keyword fixes, `breakwise fix`, `plan_fixes`, and checking the index attestation | Every notice's fix turns `example.before` into `example.after` |
@@ -224,7 +224,7 @@ When the engine starts, the notice model that the validator and the verifier sha
 
 Writing notices is ongoing work, not a phase. Notices for LangChain and the OpenAI Python SDK start after phase 1 and continue alongside the other phases, and the draft generator in phase 6 speeds them up.
 
-PyPI can't reserve a name, so the first release, at the end of phase 1, is small but real: it reads the index and has `breakwise explain`. The index must have its final URL before that release.
+PyPI can't reserve a name, and this document makes the name public, so phase 1 starts with a small but real release: the package bundles a copy of the notices, and `breakwise explain` works offline. The index must have its final URL before the first release that downloads it.
 
 ## Looking further
 

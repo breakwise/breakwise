@@ -92,14 +92,15 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 
 - [x] Notice format v0.1 and its JSON Schema
 - [x] Check every notice and run its examples on real package versions, on each pull request
-- [ ] Format v0.2, the pydantic-ai V2 notices and a published index, with a first release on PyPI that has `breakwise explain`
+- [ ] A first release on PyPI: `breakwise explain` shows any notice, offline
+- [ ] Format v0.2, the pydantic-ai V2 notices and a published index
 - [ ] `breakwise scan`: report the code that an upgrade breaks
 - [ ] MCP server for AI coding agents
 - [ ] `breakwise fix`: apply tested fixes, alone or in a two-step upgrade
 - [ ] GitHub Action that comments tested fixes on Dependabot and Renovate pull requests
 - [ ] Draft generator for new notices, and an agent for changes that need a person
 
-Notices for LangChain and the OpenAI Python SDK start after the first open step and continue alongside the others.
+Notices for LangChain and the OpenAI Python SDK start once the pydantic-ai V2 notices are in, and continue alongside the others.
 The phases, and why Breakwise is built this way, are in [docs/architecture.md](docs/architecture.md).
 
 ## Contributing
