@@ -48,6 +48,20 @@ jobs:
         run: python -m pytest --cov
       - name: Validate notices
         run: python tools/validate_notices.py
+      - name: Build the package and run it
+        # The wheel must hold the notices and both licenses, and the command must work from it.
+        run: |
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/dist"
+          wheels=("$RUNNER_TEMP"/dist/*.whl)
+          python -m zipfile -l "${wheels[0]}" > "$RUNNER_TEMP/wheel.txt"
+          for file in \
+            breakwise/data/notices/pypi/pydantic-ai/BW-2026-0001.yaml \
+            licenses/LICENSE \
+            licenses/notices/LICENSE.md; do
+            grep -F "$file" "$RUNNER_TEMP/wheel.txt"
+          done
+          python -m pip install --no-deps "${wheels[0]}"
+          breakwise explain BW-2026-0001
       - name: Lint YAML
         run: yamllint --strict .
       - name: Lint Markdown
