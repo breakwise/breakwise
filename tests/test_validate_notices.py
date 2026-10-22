@@ -17,6 +17,40 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTICE = Path("notices/pypi/pydantic-ai/BW-2026-0001.yaml")
 TODAY = dt.date(2026, 10, 21)
 
+# The tests start from this copy of BW-2026-0001 as it was first published.
+# It is fixed here, so that changes to the real notice don't break the tests.
+NOTICE_TEXT = """\
+---
+schema_version: "0.1"
+id: BW-2026-0001
+status: verified
+published: "2026-10-21"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0"
+works_since: "0.7.6"
+summary: OpenAIModel was renamed to OpenAIChatModel, and the old name was removed in 2.0.0.
+rename:
+  from: pydantic_ai.models.openai.OpenAIModel
+  to: pydantic_ai.models.openai.OpenAIChatModel
+example:
+  before: |
+    from pydantic_ai.models.openai import OpenAIModel
+
+    model = OpenAIModel("gpt-5")
+  after: |
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    model = OpenAIChatModel("gpt-5")
+references:
+  - https://pydantic.dev/docs/ai/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.6/pydantic_ai_slim/pydantic_ai/models/openai.py
+"""
+
 BEFORE_BLOCK = (
     '    from pydantic_ai.models.openai import OpenAIModel\n\n    model = OpenAIModel("gpt-5")\n'
 )
@@ -28,11 +62,13 @@ AFTER_BLOCK = (
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A small copy of the repository with one valid notice and a README without examples."""
-    for rel in (vn.SCHEMA_FILE, NOTICE):
-        target = tmp_path / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(REPO_ROOT / rel, target)
+    """A small repository with the real schema, the fixed notice and a README without examples."""
+    schema = tmp_path / vn.SCHEMA_FILE
+    schema.parent.mkdir(parents=True)
+    shutil.copy(REPO_ROOT / vn.SCHEMA_FILE, schema)
+    notice = tmp_path / NOTICE
+    notice.parent.mkdir(parents=True)
+    notice.write_text(NOTICE_TEXT, encoding="utf-8")
     (tmp_path / vn.README_FILE).write_text("# Test\n", encoding="utf-8")
     return tmp_path
 
