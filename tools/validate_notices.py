@@ -457,7 +457,10 @@ def _check_rename(notice: Notice) -> Iterator[Problem]:
 
 
 def check_readme(root: Path, notices: Mapping[str, Path]) -> list[Problem]:
-    """Check that every notice shown in README.md matches its file exactly."""
+    """Check that every notice shown in README.md matches its file exactly, valid or not.
+
+    ``notices`` maps each ID to the file of its notice.
+    """
     readme = root / README_FILE
     if not readme.is_file():
         return []
@@ -478,7 +481,7 @@ def check_readme(root: Path, notices: Mapping[str, Path]) -> list[Problem]:
         notice_id = str(shown["id"])
         path = notices.get(notice_id)
         if path is None:
-            message = f"The example shows {notice_id}, but there is no valid notice with that ID."
+            message = f"The example shows {notice_id}, but there is no notice with that ID."
             problems.append(Problem(README_FILE, line, message))
         elif block != (root / path).read_text(encoding="utf-8"):
             message = f"The example must match {path.as_posix()} exactly."
@@ -503,6 +506,7 @@ def validate(root: Path, today: dt.date | None = None) -> tuple[list[Problem], i
 
     problems: list[Problem] = []
     seen_ids: dict[str, Path] = {}
+    files_by_name: dict[str, Path] = {}
     count = 0
     for path in registry_files(root):
         if path.suffix == ".md":
@@ -512,8 +516,10 @@ def validate(root: Path, today: dt.date | None = None) -> tuple[list[Problem], i
             problems.append(Problem(path.relative_to(root), 1, message))
             continue
         count += 1
+        files_by_name.setdefault(path.stem, path.relative_to(root))
         problems += check_notice(root, path, validator, seen_ids, today)
-    problems += check_readme(root, seen_ids)
+    # A notice that cannot be read is found by its file name, which must be its ID.
+    problems += check_readme(root, {**files_by_name, **seen_ids})
     return problems, count
 
 

@@ -579,7 +579,25 @@ def test_readme_example_must_be_a_real_notice(repo: Path) -> None:
     block = '```yaml\nschema_version: "0.1"\nid: BW-2026-9999\n```\n'
     readme.write_text(f"\n{block}", encoding="utf-8")
     assert problems_in(repo) == [
-        "README.md:2: The example shows BW-2026-9999, but there is no valid notice with that ID."
+        "README.md:2: The example shows BW-2026-9999, but there is no notice with that ID."
+    ]
+
+
+def test_readme_example_is_compared_with_an_invalid_notice_too(repo: Path) -> None:
+    edit(repo, 'breaks_in: "2.0.0"', "breaks_in: 2.0")
+    message = 'Write 2.0 in quotes, as "2.0", so that YAML reads it as text.'
+    notice_problem = at(repo, "breaks_in:", message)
+    notice_text = (repo / NOTICE).read_text(encoding="utf-8")
+    readme = repo / vn.README_FILE
+
+    # The README shows the notice as it is, so only the notice's own problem is reported.
+    readme.write_text(f"```yaml\n{notice_text}```\n", encoding="utf-8")
+    assert problems_in(repo) == [notice_problem]
+
+    readme.write_text(f"```yaml\n{notice_text}# an older copy\n```\n", encoding="utf-8")
+    assert problems_in(repo) == [
+        notice_problem,
+        f"README.md:1: The example must match {NOTICE.as_posix()} exactly.",
     ]
 
 
