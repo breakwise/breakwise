@@ -119,6 +119,8 @@ The tests must cover every line and branch of `tools/`.
 `tools/verify_examples.py` installs real package versions from PyPI, so it needs network access.
 The pull request checks also lint YAML, Markdown and the workflows;
 see [`.github/workflows/checks.yml`](.github/workflows/checks.yml).
+markdownlint-cli2 and its dependencies are pinned in `package-lock.json`; install them with `npm ci --ignore-scripts`.
+To update it, change its version in `package.json`, then run `npm install --package-lock-only --ignore-scripts`.
 
 ## License
 

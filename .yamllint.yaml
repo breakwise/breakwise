@@ -1,5 +1,7 @@
 ---
 extends: default
+# Skip files that git ignores, such as node_modules.
+ignore-from-file: .gitignore
 rules:
   line-length:
     max: 120
