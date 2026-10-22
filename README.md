@@ -104,7 +104,7 @@ New notices start as `draft` until a maintainer verifies them.
 
 ## Development
 
-Run the main checks locally with Python 3.12 or later, on Linux or macOS:
+Run the main checks locally on Linux or macOS. The tools work on Python 3.12, 3.13 and 3.14, and CI tests all three:
 
 ```sh
 python -m pip install --require-hashes -r requirements-dev.txt
@@ -117,6 +117,7 @@ python tools/verify_examples.py --all
 
 The tests must cover every line and branch of `tools/`.
 `tools/verify_examples.py` installs real package versions from PyPI, so it needs network access.
+Run it with Python 3.12, or pass `--python` a Python 3.12 interpreter, because old package versions may not install on newer Python versions.
 The pull request checks also lint YAML, Markdown and the workflows;
 see [`.github/workflows/checks.yml`](.github/workflows/checks.yml).
 markdownlint-cli2 and its dependencies are pinned in `package-lock.json`; install them with `npm ci --ignore-scripts`.

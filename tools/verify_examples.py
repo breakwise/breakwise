@@ -264,6 +264,8 @@ def _read_project_page(name: str, attempts: int, sleep: Callable[[float], None])
                 body: bytes = response.read()
                 return body
         except urllib.error.HTTPError as error:
+            # The error holds PyPI's response, so it must be closed like one.
+            error.close()
             if error.code == HTTPStatus.NOT_FOUND:
                 raise VerifyError(f"{name} is not on PyPI.") from error
             busy = error.code == HTTPStatus.TOO_MANY_REQUESTS

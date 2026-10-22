@@ -150,6 +150,15 @@ def test_fetch_releases_does_not_retry_client_errors(
     assert (str(raised.value), pypi.calls) == (message, 1)
 
 
+def test_fetch_releases_closes_every_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An HTTPError holds PyPI's response. Python 3.14 warns when one is left open.
+    errors = [http_error(500), http_error(429), http_error(404)]
+    monkeypatch.setattr(urllib.request, "urlopen", FakePyPI(*errors))
+    with pytest.raises(ve.VerifyError, match="demo is not on PyPI"):
+        ve.fetch_releases("demo", sleep=lambda _: None)
+    assert [error.closed for error in errors] == [True, True, True]
+
+
 @pytest.mark.parametrize("body", [b"<html>not json</html>", b'{"meta": {}}', b'{"files": [1]}'])
 def test_fetch_releases_reports_unexpected_answers(
     monkeypatch: pytest.MonkeyPatch, body: bytes
