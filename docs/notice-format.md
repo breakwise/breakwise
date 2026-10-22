@@ -20,7 +20,7 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 ## Fields
 
 | Field | Required | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `schema_version` | yes | Version of this format: `"0.1"`. |
 | `id` | yes | Unique ID `BW-<year>-<number>`: the year it was published and a number with at least four digits, e.g. `BW-2026-0001`. Never reused. |
 | `status` | yes | `draft` (not reviewed yet) or `verified` (checked by a maintainer against the official sources). |
