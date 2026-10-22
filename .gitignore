@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node.js packages for the development tools
+node_modules/
+
+# Notices are never ignored, whatever their package is called.
+!notices/**
