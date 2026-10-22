@@ -79,7 +79,7 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 ## Repository layout
 
 | Path | Contents |
-|---|---|
+| --- | --- |
 | [`notices/`](notices/) | The registry: one YAML file per breaking change |
 | [`docs/`](docs/) | Documentation, starting with the notice format |
 | [`schema/`](schema/) | JSON Schema for notices |
@@ -120,8 +120,9 @@ The tests must cover every line and branch of `tools/`.
 Run it with Python 3.12, or pass `--python` a Python 3.12 interpreter, because old package versions may not install on newer Python versions.
 The pull request checks also lint YAML, Markdown and the workflows;
 see [`.github/workflows/checks.yml`](.github/workflows/checks.yml).
-markdownlint-cli2 and its dependencies are pinned in `package-lock.json`; install them with `npm ci --ignore-scripts`.
+markdownlint-cli2 needs Node.js 22.12 or later. It and its dependencies are pinned in `package-lock.json`; install them with `npm ci --ignore-scripts`.
 To update it, change its version in `package.json`, then run `npm install --package-lock-only --ignore-scripts`.
+`overrides` in `package.json` forces katex 0.19.0, which fixes [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7); remove it once markdownlint depends on a fixed katex.
 
 ## License
 
