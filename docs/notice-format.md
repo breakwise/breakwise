@@ -31,10 +31,10 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 | `package.aliases` | no | Other packages that ship the same code with the same version numbers, e.g. `pydantic-ai-slim`. |
 | `type` | yes | `rename`, `removal`, `signature` (parameters changed) or `behavior` (same code, different result). |
 | `breaks_in` | yes | First version in which the old code stops working. |
-| `works_since` | no | First version in which the new code works. When set, the fix can be applied before upgrading. |
-| `summary` | yes | One sentence, at most 200 characters. |
-| `rename.from`, `rename.to` | when `type` is `rename` | Old and new names as users import them, e.g. `pydantic_ai.models.openai.OpenAIModel`. Tools rewrite imports and usages automatically. |
-| `instructions` | for every other `type` | Plain steps to migrate, for people and coding agents. |
+| `works_since` | no | The first release in which the new code works, so the fix can be applied before upgrading. Leave it out if that release can't be found or doesn't install on Python 3.12, for example when the new code already works on the oldest release that installs. |
+| `summary` | yes | One sentence, 10 to 200 characters. |
+| `rename.from`, `rename.to` | when `type` is `rename` | Old and new names as users import them: a module, class, function, method or attribute, written as its full dotted path, e.g. `pydantic_ai.models.openai.OpenAIModel`. Tools rewrite imports and usages automatically. |
+| `instructions` | for every other `type` | Plain steps to migrate, for people and coding agents, at least 10 characters. |
 | `example.before`, `example.after` | yes | The smallest code that shows the change. |
 | `references` | yes | `https` links to official sources: changelog, migration guide, release notes or source code. |
 
@@ -50,9 +50,13 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
 3. **Automatic fixes first.** Use `rename` whenever the change is a pure rename,
    with the old name in `example.before` and only the new name in `example.after`.
    Use `instructions` only when a person has to decide.
+   `rename` covers names that code imports or uses: modules, classes, functions, methods and attributes.
+   A changed string, such as the model prefix `grok:` becoming `xai:`, is a `signature` change with `instructions`,
+   and so is a renamed keyword argument in format 0.1.
 4. **Tested examples.** On every pull request, `tools/verify_examples.py` installs real versions from PyPI
    and checks that `example.before` runs on the last stable release before `breaks_in` and fails on `breaks_in`,
    and that `example.after` runs on `breaks_in` and on `works_since`.
+   When `works_since` is not later than that last stable release, `example.after` must run on it too.
    `example.before` must also run on the release just before `breaks_in`, even a pre-release,
    and `example.after` must fail on the release just before `works_since`, so that both are the first such releases.
    For a `rename`, the error that stops `example.before` must name the old name,
