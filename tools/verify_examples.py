@@ -10,10 +10,16 @@ on real releases of its package:
 
 - on the last stable release before ``breaks_in``, ``example.before`` must run,
   and so must ``example.after`` when ``works_since`` is not later than that release;
+- on the release just before ``breaks_in``, when it is a pre-release,
+  ``example.before`` must run too, so that ``breaks_in`` is the first release
+  on which it fails;
 - on ``breaks_in``, ``example.before`` must fail and ``example.after`` must run.
   For a rename, the exception that ends ``example.before`` must name the old
   name, so that a failure for another reason does not count;
-- on ``works_since``, when it is set, ``example.after`` must run.
+- on ``works_since``, when it is set, ``example.after`` must run, and on the
+  release just before it, ``example.after`` must fail, so that ``works_since``
+  is the first release on which it runs. For a rename, that exception must
+  name the new name.
 
 Releases and their upload times come from PyPI's JSON Simple API (PEP 691 and
 PEP 700). Each version is installed with ``uv`` together with its dependencies
@@ -288,20 +294,29 @@ def plan_checks(
     for field, version in (("breaks_in", breaks_in), ("works_since", works_since)):
         if version is not None and version not in releases:
             raise VerifyError(f"{field} {version} is not a release on PyPI, or it was yanked.")
-    earlier = [v for v in releases if v < breaks_in and not v.is_prerelease]
-    if not earlier:
+    earlier = [v for v in releases if v < breaks_in]
+    stable = [v for v in earlier if not v.is_prerelease]
+    if not stable:
         raise VerifyError(f"There is no stable release before breaks_in {breaks_in}.")
-    previous = max(earlier)
+    previous = max(stable)
 
     checks = [Check(previous, "before", should_run=True)]
     if works_since is not None and works_since <= previous:
         checks.append(Check(previous, "after", should_run=True))
+    # breaks_in must be the first release that breaks, even after pre-releases.
+    if max(earlier) != previous:
+        checks.append(Check(max(earlier), "before", should_run=True))
     checks += [
         Check(breaks_in, "before", should_run=False),
         Check(breaks_in, "after", should_run=True),
     ]
-    if works_since is not None and works_since not in (previous, breaks_in):
-        checks.append(Check(works_since, "after", should_run=True))
+    if works_since is not None:
+        if works_since not in (previous, breaks_in):
+            checks.append(Check(works_since, "after", should_run=True))
+        # works_since must be the first release on which the new code runs.
+        older = [v for v in releases if v < works_since]
+        if older:
+            checks.append(Check(max(older), "after", should_run=False))
     return checks
 
 
@@ -428,9 +443,11 @@ def verify_notice(
     name = notice["package"]["name"]
     breaks_in = Version(notice["breaks_in"])
     works_since = Version(notice["works_since"]) if "works_since" in notice else None
-    expected_error = None
+    # For a rename, each example must fail because of the name it uses, not another reason.
+    expected_errors: dict[str, str | None] = {"before": None, "after": None}
     if notice["type"] == "rename":
-        expected_error = distinguishing_names(notice["rename"]["from"], notice["rename"]["to"])[0]
+        old, new = distinguishing_names(notice["rename"]["from"], notice["rename"]["to"])
+        expected_errors = {"before": old, "after": new}
 
     releases = fetch(name)
     checks = plan_checks(releases, breaks_in, works_since)
@@ -447,7 +464,8 @@ def verify_notice(
             run = _shorten_paths(
                 run_example(interpreters[check.version], code, tmp / f"run-{number}"), tmp
             )
-            results.append(evaluate(check, run, None if check.should_run else expected_error))
+            expected_error = None if check.should_run else expected_errors[check.example]
+            results.append(evaluate(check, run, expected_error))
     return results
 
 

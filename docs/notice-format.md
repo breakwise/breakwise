@@ -53,7 +53,10 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
 4. **Tested examples.** On every pull request, `tools/verify_examples.py` installs real versions from PyPI
    and checks that `example.before` runs on the last stable release before `breaks_in` and fails on `breaks_in`,
    and that `example.after` runs on `breaks_in` and on `works_since`.
-   For a `rename`, the error that stops `example.before` must name the old name.
+   `example.before` must also run on the release just before `breaks_in`, even a pre-release,
+   and `example.after` must fail on the release just before `works_since`, so that both are the first such releases.
+   For a `rename`, the error that stops `example.before` must name the old name,
+   and the error that stops `example.after` must name the new name.
 5. **Offline examples.** Examples run without network access and with fake API keys,
    so they must not call real services: an example that fails after trying to reach the network fails the check.
    For a `behavior` change, use `assert` so that the example fails when the behavior differs.

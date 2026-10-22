@@ -175,6 +175,7 @@ def test_plan_without_works_since() -> None:
     available = releases("1.0.0", "1.1.0", "2.0.0rc1", "2.0.0", "2.1.0")
     assert plan(available, "2.0.0") == [
         ("1.1.0", "before", True),
+        ("2.0.0rc1", "before", True),
         ("2.0.0", "before", False),
         ("2.0.0", "after", True),
     ]
@@ -188,6 +189,7 @@ def test_plan_with_works_since_before_the_previous_release() -> None:
         ("2.0.0", "before", False),
         ("2.0.0", "after", True),
         ("0.7.6", "after", True),
+        ("0.7.5", "after", False),
     ]
 
 
@@ -198,11 +200,13 @@ def test_plan_does_not_repeat_versions() -> None:
         ("1.1.0", "after", True),
         ("2.0.0", "before", False),
         ("2.0.0", "after", True),
+        ("1.0.0", "after", False),
     ]
     assert plan(available, "2.0.0", "2.0.0") == [
         ("1.1.0", "before", True),
         ("2.0.0", "before", False),
         ("2.0.0", "after", True),
+        ("1.1.0", "after", False),
     ]
 
 
@@ -210,9 +214,32 @@ def test_plan_checks_a_pre_release_works_since_on_its_own() -> None:
     available = releases("1.0.0", "2.0.0b1", "2.0.0")
     assert plan(available, "2.0.0", "2.0.0b1") == [
         ("1.0.0", "before", True),
+        ("2.0.0b1", "before", True),
         ("2.0.0", "before", False),
         ("2.0.0", "after", True),
         ("2.0.0b1", "after", True),
+        ("1.0.0", "after", False),
+    ]
+
+
+def test_plan_runs_before_on_the_release_just_before_breaks_in() -> None:
+    # Only the nearest pre-release: if 2.0.0b1 still runs the old code, so did 2.0.0a1.
+    available = releases("1.9.0", "2.0.0a1", "2.0.0b1", "2.0.0")
+    assert plan(available, "2.0.0") == [
+        ("1.9.0", "before", True),
+        ("2.0.0b1", "before", True),
+        ("2.0.0", "before", False),
+        ("2.0.0", "after", True),
+    ]
+
+
+def test_plan_has_nothing_before_a_works_since_that_is_the_first_release() -> None:
+    available = releases("1.0.0", "2.0.0")
+    assert plan(available, "2.0.0", "1.0.0") == [
+        ("1.0.0", "before", True),
+        ("1.0.0", "after", True),
+        ("2.0.0", "before", False),
+        ("2.0.0", "after", True),
     ]
 
 
@@ -602,12 +629,17 @@ def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
         ),
         "ok 2.0.0 after: runs",
         "ok 1.5.0 after: runs",
+        (
+            "ok 1.0.0 after: fails as expected: ImportError: cannot import name 'New' "
+            f"from 'fakelib' (<tmp>/venv-1.0.0/{site}/fakelib.py)"
+        ),
     ]
     # One environment per version, each with dependencies as of a day after the upload.
     assert index.installed == [
         ("fakelib", "1.9.0", "2026-01-02T12:00:00Z"),
         ("fakelib", "2.0.0", "2026-01-02T12:00:00Z"),
         ("fakelib", "1.5.0", "2026-01-02T12:00:00Z"),
+        ("fakelib", "1.0.0", "2026-01-02T12:00:00Z"),
     ]
 
 
@@ -617,6 +649,7 @@ def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
     [
         ("1.9.0", "1.5.0", "FAIL 1.9.0 before: should fail on this version, but it ran"),
         ("2.0.0", "1.0.0", "FAIL 1.0.0 after: should run, but failed: ImportError"),
+        ("2.0.0", "1.9.0", "FAIL 1.5.0 after: should fail on this version, but it ran"),
     ],
 )
 def test_a_notice_with_wrong_versions_fails(
@@ -626,6 +659,31 @@ def test_a_notice_with_wrong_versions_fails(
     failures = [line for line in lines if line.startswith("FAIL")]
     assert len(failures) == 1
     assert failures[0].startswith(failure)
+
+
+@posix_only
+def test_breaks_in_must_be_the_first_release_that_breaks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pre-release already removed Old, so 2.0.0 is not the first release that breaks.
+    monkeypatch.setitem(FAKE_VERSIONS, "2.0.0b1", "class New: pass\n")
+    lines = verify(write_notice(tmp_path), FakeIndex())
+    failures = [line for line in lines if line.startswith("FAIL")]
+    assert len(failures) == 1
+    assert failures[0].startswith(
+        "FAIL 2.0.0b1 before: should run, but failed: ImportError: cannot import name 'Old'"
+    )
+
+
+@posix_only
+def test_after_must_fail_because_of_the_new_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "1.0.0", "raise RuntimeError('broken')\n")
+    lines = verify(write_notice(tmp_path), FakeIndex())
+    assert [line for line in lines if line.startswith("FAIL")] == [
+        "FAIL 1.0.0 after: fails, but not because of New: RuntimeError: broken"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -663,6 +721,7 @@ def test_any_failure_counts_for_changes_other_than_renames(tmp_path: Path) -> No
         "ok 2.0.0 before",
         "ok 2.0.0 after",
         "ok 1.5.0 after",
+        "ok 1.0.0 after",
     ]
 
 
