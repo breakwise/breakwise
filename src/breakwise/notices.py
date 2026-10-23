@@ -15,7 +15,8 @@ from breakwise import __version__
 # Building the package copies the registry's notices/ folder here.
 DATA: Traversable = resources.files("breakwise") / "data" / "notices"
 REPOSITORY = "https://github.com/breakwise/breakwise"
-NOTICE_ID = re.compile(r"BW-[0-9]{4}-[0-9]{4,}")
+# The pattern of "id" in the notice schema, character for character. A test keeps them equal.
+NOTICE_ID = re.compile(r"^BW-[0-9]{4}-(?!0000$)([0-9]{4}|[1-9][0-9]{4,})$")
 
 
 class NoticeError(Exception):
