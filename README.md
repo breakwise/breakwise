@@ -146,6 +146,6 @@ To update it, change its version in `package.json`, then run `npm install --pack
 
 ## License
 
-- Code and schema: [Apache-2.0](LICENSE)
+- Code, schema and docs: [Apache-2.0](LICENSE)
 - Notices in [`notices/`](notices/): [CC BY 4.0](notices/LICENSE.md)
 - The [code of conduct](.github/CODE_OF_CONDUCT.md), adapted from the Contributor Covenant 3.0: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
