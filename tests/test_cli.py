@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 RENAME = """\
 ---
-schema_version: "0.1"
+schema_version: "0.2"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
@@ -44,7 +44,7 @@ references:
 
 REMOVAL = """\
 ---
-schema_version: "0.1"
+schema_version: "0.2"
 id: BW-2026-0002
 status: draft
 published: "2026-10-22"

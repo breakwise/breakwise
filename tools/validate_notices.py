@@ -22,7 +22,10 @@ checks that:
 - ``works_since`` is not later than ``breaks_in``,
 - its example code is valid Python, and a rename's examples use the old name
   before the change and only the new name after it. Imports, names and
-  attributes count as uses; comments, strings and keyword arguments do not.
+  attributes count as uses; comments, strings and keyword arguments do not,
+- for a renamed keyword argument (``rename.keyword_of``), the names are not
+  Python keywords, ``example.before`` passes the old keyword to one of the
+  callables, and ``example.after`` passes the new keyword and not the old one.
 
 It also checks that every notice shown in ``README.md`` matches its file exactly.
 
@@ -37,20 +40,22 @@ import argparse
 import ast
 import datetime as dt
 import json
+import keyword
 import os
 import re
 import sys
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from jsonschema import Draft202012Validator, ValidationError
 from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_FILE = Path("schema/notice-0.1.schema.json")
+# The tools read only the latest format. Earlier schemas stay in schema/, unchanged.
+SCHEMA_FILE = Path("schema/notice-0.2.schema.json")
 NOTICES_DIR = Path("notices")
 README_FILE = Path("README.md")
 
@@ -60,6 +65,14 @@ README_YAML_BLOCK = re.compile(r"^```ya?ml\n(.*?)^```$", re.MULTILINE | re.DOTAL
 # written without quotes, e.g. 2.10, which YAML reads as the number 2.1.
 # Empty values are left to the schema, which says that they are missing.
 TEXT_TAGS = frozenset({"tag:yaml.org,2002:str", "tag:yaml.org,2002:null"})
+
+# What the schema's "not" rules forbid, by the field they name.
+NOT_ALLOWED = {
+    "rename": "`rename` is only allowed when `type` is `rename`.",
+    "instructions": (
+        "`instructions` is not allowed when `type` is `rename`: a rename is fixed automatically."
+    ),
+}
 
 
 @dataclass(frozen=True, order=True)
@@ -161,7 +174,9 @@ def describe(error: ValidationError) -> str:
     if error.validator == "pattern" and description:
         message = f"{error.instance!r} is not valid. Expected {description}"
     elif error.validator == "not" and not field:
-        message = "`rename` is only allowed when `type` is `rename`."
+        # The schema's two "not" rules are {"required": [<field>]}.
+        (name,) = cast("Mapping[str, list[str]]", error.validator_value)["required"]
+        message = NOT_ALLOWED[name]
     elif error.validator == "type" and error.instance is None:
         message = "has no value."
     else:
@@ -355,6 +370,7 @@ def check_notice(
         *_check_location(notice),
         *_check_dates(notice, today),
         *_check_versions(notice),
+        *_check_keyword_names(notice),
         *_check_examples(notice),
     ]
     notice_id: str = notice.data["id"]
@@ -411,6 +427,17 @@ def _check_versions(notice: Notice) -> Iterator[Problem]:
         yield notice.problem("works_since", message)
 
 
+def _check_keyword_names(notice: Notice) -> Iterator[Problem]:
+    """A renamed keyword argument can't have a name that Python reserves, such as ``class``."""
+    rename = notice.data.get("rename", {})
+    if "keyword_of" not in rename:
+        return
+    for field in ("from", "to"):
+        if keyword.iskeyword(rename[field]):
+            message = f"rename.{field}: {rename[field]} is a Python keyword, so no argument has it."
+            yield notice.problem(f"rename.{field}", message)
+
+
 def _check_examples(notice: Notice) -> Iterator[Problem]:
     valid = True
     for which in ("before", "after"):
@@ -439,9 +466,13 @@ def _code_line(tree: yaml.Node, which: str, lineno: int) -> int:
 
 
 def _check_rename(notice: Notice) -> Iterator[Problem]:
-    old, new = notice.data["rename"]["from"], notice.data["rename"]["to"]
+    rename = notice.data["rename"]
+    old, new = rename["from"], rename["to"]
     if old == new:
         yield notice.problem("rename", "rename.from and rename.to are the same.")
+        return
+    if "keyword_of" in rename:
+        yield from _check_keyword_rename(notice, old, new, rename["keyword_of"])
         return
     old_name, new_name = distinguishing_names(old, new)
     before, after = notice.data["example"]["before"], notice.data["example"]["after"]
@@ -454,6 +485,45 @@ def _check_rename(notice: Notice) -> Iterator[Problem]:
     if renamed and uses(after, old_name):
         message = f"example.after must not use the old name {old_name}."
         yield notice.problem("example.after", message)
+
+
+def _check_keyword_rename(
+    notice: Notice, old: str, new: str, callables: Sequence[str]
+) -> Iterator[Problem]:
+    """The examples pass the old keyword before the change, and only the new one after it."""
+    names = {callable_.rpartition(".")[2] for callable_ in callables}
+    listed = " or ".join(callables)
+    before = passed_keywords(notice.data["example"]["before"], names)
+    after = passed_keywords(notice.data["example"]["after"], names)
+    if old not in before:
+        yield notice.problem("example.before", f"example.before must pass {old}= to {listed}.")
+    if new not in after:
+        yield notice.problem("example.after", f"example.after must pass {new}= to {listed}.")
+    if old in after:
+        yield notice.problem("example.after", f"example.after must not pass {old}= to {listed}.")
+
+
+def passed_keywords(code: str, callables: Collection[str]) -> set[str]:
+    """Return the keyword arguments that Python code passes to the named callables.
+
+    A call matches by the last part of its name, so ``Agent(...)``,
+    ``pydantic_ai.Agent(...)`` and ``agent.run(...)`` match ``Agent`` and ``run``.
+    Keyword arguments passed through ``**`` are not counted.
+    """
+    keywords: set[str] = set()
+    for node in ast.walk(ast.parse(code)):
+        if isinstance(node, ast.Call) and _called_name(node.func) in callables:
+            keywords.update(argument.arg for argument in node.keywords if argument.arg)
+    return keywords
+
+
+def _called_name(function: ast.expr) -> str | None:
+    """``f`` for ``f()``, ``run`` for ``agent.run()``, and None for a call such as ``f()()``."""
+    if isinstance(function, ast.Name):
+        return function.id
+    if isinstance(function, ast.Attribute):
+        return function.attr
+    return None
 
 
 def check_readme(root: Path, notices: Mapping[str, Path]) -> list[Problem]:

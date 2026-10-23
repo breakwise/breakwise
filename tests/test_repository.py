@@ -1,13 +1,27 @@
-"""Tests for the repository's own settings, such as .gitignore."""
+"""Tests for the repository's own settings, such as .gitignore and the released schemas."""
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Released notice formats never change: a change goes into the next format version.
+RELEASED_SCHEMAS = {
+    "schema/notice-0.1.schema.json": (
+        "38d4785467ab0515960e9acb32fe53c46d5b3ae439c4b571b6c1d52046b7478c"
+    ),
+}
+
+
+@pytest.mark.parametrize(("schema", "sha256"), RELEASED_SCHEMAS.items())
+def test_released_schemas_never_change(schema: str, sha256: str) -> None:
+    digest = hashlib.sha256((REPO_ROOT / schema).read_bytes()).hexdigest()
+    assert digest == sha256, f"{schema} changed. Put the change in a new format version instead."
 
 
 # Real PyPI packages named like folders that .gitignore ignores, such as build/ and lib/.

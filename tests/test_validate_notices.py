@@ -17,11 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTICE = Path("notices/pypi/pydantic-ai/BW-2026-0001.yaml")
 TODAY = dt.date(2026, 10, 21)
 
-# The tests start from this copy of BW-2026-0001 as it was first published.
+# The tests start from this copy of BW-2026-0001 as it was first published, in format 0.2.
 # It is fixed here, so that changes to the real notice don't break the tests.
 NOTICE_TEXT = """\
 ---
-schema_version: "0.1"
+schema_version: "0.2"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
@@ -284,9 +284,25 @@ def test_duplicate_keys_are_rejected_at_any_depth(repo: Path) -> None:
             "id: BW-2026-0001",
             "id: BW-26-1",
             "id:",
-            "id: 'BW-26-1' is not valid. Expected an ID like BW-2026-0001: "
-            "the year it was published, then a number with at least four digits.",
+            "id: 'BW-26-1' is not valid. Expected an ID like BW-2026-0001: the year it was "
+            "published, then a number of four digits or more, without extra leading zeros.",
             id="bad id",
+        ),
+        pytest.param(
+            "type: rename",
+            'type: rename\ninstructions: "Rename every use of OpenAIModel."',
+            "schema_version:",
+            "`instructions` is not allowed when `type` is `rename`: "
+            "a rename is fixed automatically.",
+            id="rename with instructions",
+        ),
+        pytest.param(
+            "  from: pydantic_ai.models.openai.OpenAIModel",
+            "  from: OpenAIModel",
+            "  from:",
+            "rename.from: 'OpenAIModel' is not valid. "
+            "Expected a Python import path, e.g. pydantic_ai.models.openai.OpenAIModel.",
+            id="name without its module",
         ),
         pytest.param(
             "  name: pydantic-ai",
@@ -589,6 +605,200 @@ def test_distinguishing_names() -> None:
     assert vn.distinguishing_names("a.b.Name", "a.c.Name") == ("a.b", "a.c")
 
 
+# --- IDs ----------------------------------------------------------------------
+
+
+def renumber(repo: Path, notice_id: str) -> Path:
+    """Give the notice another ID and move its file to match. Return the new path in the repo."""
+    path = repo / NOTICE
+    text = path.read_text(encoding="utf-8").replace("id: BW-2026-0001", f"id: {notice_id}")
+    path.unlink()
+    target = path.with_name(f"{notice_id}.yaml")
+    target.write_text(text, encoding="utf-8")
+    return target.relative_to(repo)
+
+
+@pytest.mark.parametrize("notice_id", ["BW-2026-0001", "BW-2026-9999", "BW-2026-10000"])
+def test_ids_have_four_digits_or_more(repo: Path, notice_id: str) -> None:
+    renumber(repo, notice_id)
+    assert problems_in(repo) == []
+
+
+@pytest.mark.parametrize("notice_id", ["BW-2026-0000", "BW-2026-00001", "BW-2026-01000"])
+def test_ids_have_no_extra_leading_zeros(repo: Path, notice_id: str) -> None:
+    rel = renumber(repo, notice_id)
+    message = (
+        f"id: {notice_id!r} is not valid. Expected an ID like BW-2026-0001: the year it was "
+        "published, then a number of four digits or more, without extra leading zeros."
+    )
+    assert problems_in(repo) == [f"{rel.as_posix()}:3: {message}"]
+
+
+# --- Renamed keyword arguments ------------------------------------------------
+
+KEYWORD_RENAME = (
+    "rename:\n  keyword_of:\n    - pydantic_ai.Agent\n  from: mcp_servers\n  to: toolsets\n"
+)
+KEYWORD_BEFORE = '    from pydantic_ai import Agent\n\n    agent = Agent("test", mcp_servers=[])\n'
+KEYWORD_AFTER = '    from pydantic_ai import Agent\n\n    agent = Agent("test", toolsets=[])\n'
+
+
+@pytest.fixture
+def keyword_repo(repo: Path) -> Path:
+    """The repository with a notice for a renamed keyword argument, mcp_servers to toolsets."""
+    edit(
+        repo,
+        "rename:\n  from: pydantic_ai.models.openai.OpenAIModel\n"
+        "  to: pydantic_ai.models.openai.OpenAIChatModel\n",
+        KEYWORD_RENAME,
+    )
+    edit(repo, BEFORE_BLOCK, KEYWORD_BEFORE)
+    edit(repo, AFTER_BLOCK, KEYWORD_AFTER)
+    return repo
+
+
+def test_a_renamed_keyword_passes(keyword_repo: Path) -> None:
+    assert problems_in(keyword_repo) == []
+
+
+@pytest.mark.parametrize(
+    ("block", "code", "starts", "message"),
+    [
+        pytest.param(
+            KEYWORD_BEFORE,
+            '    from pydantic_ai import Agent\n\n    agent = Agent("test")\n',
+            "  before:",
+            "example.before must pass mcp_servers= to pydantic_ai.Agent.",
+            id="before without the old keyword",
+        ),
+        pytest.param(
+            KEYWORD_BEFORE,
+            "    from pydantic_ai import Agent\n\n"
+            '    agent = Agent("test", **{"mcp_servers": []})\n',
+            "  before:",
+            "example.before must pass mcp_servers= to pydantic_ai.Agent.",
+            id="old keyword only through **",
+        ),
+        pytest.param(
+            KEYWORD_BEFORE,
+            "    settings = dict(mcp_servers=[])\n",
+            "  before:",
+            "example.before must pass mcp_servers= to pydantic_ai.Agent.",
+            id="old keyword passed to another callable",
+        ),
+        pytest.param(
+            KEYWORD_AFTER,
+            '    from pydantic_ai import Agent\n\n    agent = Agent("test")\n',
+            "  after:",
+            "example.after must pass toolsets= to pydantic_ai.Agent.",
+            id="after without the new keyword",
+        ),
+        pytest.param(
+            KEYWORD_AFTER,
+            "    from pydantic_ai import Agent\n\n"
+            '    agent = Agent("test", toolsets=[], mcp_servers=[])\n',
+            "  after:",
+            "example.after must not pass mcp_servers= to pydantic_ai.Agent.",
+            id="after still passes the old keyword",
+        ),
+    ],
+)
+def test_renamed_keywords_must_be_passed(
+    keyword_repo: Path, block: str, code: str, starts: str, message: str
+) -> None:
+    edit(keyword_repo, block, code)
+    assert problems_in(keyword_repo) == [at(keyword_repo, starts, message)]
+
+
+def test_a_variable_may_have_the_old_keyword_name(keyword_repo: Path) -> None:
+    edit(
+        keyword_repo,
+        KEYWORD_AFTER,
+        "    from pydantic_ai import Agent\n\n    mcp_servers = []\n"
+        '    agent = Agent("test", toolsets=mcp_servers)\n',
+    )
+    assert problems_in(keyword_repo) == []
+
+
+def test_keywords_of_several_callables_and_of_methods(keyword_repo: Path) -> None:
+    edit(
+        keyword_repo,
+        "    - pydantic_ai.Agent\n",
+        "    - pydantic_ai.Agent\n    - pydantic_ai.Agent.run_sync\n",
+    )
+    edit(keyword_repo, KEYWORD_BEFORE, '    agent.run_sync("hi", mcp_servers=[])\n')
+    assert problems_in(keyword_repo) == []
+
+    edit(keyword_repo, '    agent.run_sync("hi", mcp_servers=[])\n', '    agent.run_sync("hi")\n')
+    message = (
+        "example.before must pass mcp_servers= to pydantic_ai.Agent or pydantic_ai.Agent.run_sync."
+    )
+    assert problems_in(keyword_repo) == [at(keyword_repo, "  before:", message)]
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "starts", "message"),
+    [
+        pytest.param(
+            "  from: mcp_servers",
+            "  from: pydantic_ai.Agent.mcp_servers",
+            "  from:",
+            "rename.from: 'pydantic_ai.Agent.mcp_servers' is not valid. "
+            "Expected a keyword argument name, e.g. toolsets.",
+            id="dotted keyword name",
+        ),
+        pytest.param(
+            "    - pydantic_ai.Agent\n",
+            "    - Agent\n",
+            "    - Agent",
+            "rename.keyword_of[0]: 'Agent' is not valid. "
+            "Expected a Python import path, e.g. pydantic_ai.models.openai.OpenAIModel.",
+            id="callable without its module",
+        ),
+    ],
+)
+def test_renamed_keywords_must_match_the_schema(
+    keyword_repo: Path, old: str, new: str, starts: str, message: str
+) -> None:
+    edit(keyword_repo, old, new)
+    assert problems_in(keyword_repo) == [at(keyword_repo, starts, message)]
+
+
+def test_keyword_of_lists_at_least_one_callable(keyword_repo: Path) -> None:
+    edit(keyword_repo, "  keyword_of:\n    - pydantic_ai.Agent\n", "  keyword_of: []\n")
+    problems = problems_in(keyword_repo)
+    assert len(problems) == 1
+    assert problems[0].startswith(
+        f"{NOTICE.as_posix()}:{line_number(keyword_repo, '  keyword_of:')}: "
+    )
+    assert "rename.keyword_of: [] " in problems[0]
+
+
+def test_keyword_names_are_not_python_keywords(keyword_repo: Path) -> None:
+    edit(keyword_repo, "  to: toolsets", "  to: class")
+    message = "rename.to: class is a Python keyword, so no argument has it."
+    # The example still passes toolsets=, which is not the new name any more.
+    assert problems_in(keyword_repo) == [
+        at(keyword_repo, "  to:", message),
+        at(keyword_repo, "  after:", "example.after must pass class= to pydantic_ai.Agent."),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("code", "callables", "keywords"),
+    [
+        ("Agent(x=1, y=2)", {"Agent"}, {"x", "y"}),
+        ("pydantic_ai.Agent(x=1)", {"Agent"}, {"x"}),
+        ("agent.run(x=1)", {"run"}, {"x"}),
+        ("other(x=1)", {"Agent"}, set()),
+        ("Agent(**{'x': 1})", {"Agent"}, set()),
+        ("f()(x=1)", {"f"}, set()),
+    ],
+)
+def test_passed_keywords(code: str, callables: set[str], keywords: set[str]) -> None:
+    assert vn.passed_keywords(code, callables) == keywords
+
+
 # --- README -------------------------------------------------------------------
 
 
@@ -612,7 +822,7 @@ def test_readme_example_must_match_the_notice(repo: Path) -> None:
 
 def test_readme_example_must_be_a_real_notice(repo: Path) -> None:
     readme = repo / vn.README_FILE
-    block = '```yaml\nschema_version: "0.1"\nid: BW-2026-9999\n```\n'
+    block = '```yaml\nschema_version: "0.2"\nid: BW-2026-9999\n```\n'
     readme.write_text(f"\n{block}", encoding="utf-8")
     assert problems_in(repo) == [
         "README.md:2: The example shows BW-2026-9999, but there is no notice with that ID."
@@ -639,7 +849,7 @@ def test_readme_example_is_compared_with_an_invalid_notice_too(repo: Path) -> No
 
 @pytest.mark.parametrize(
     "block",
-    ['schema_version: "0.1"\nid: [BW\n', 'schema_version: "0.1"\npublished: 2026-02-30\n'],
+    ['schema_version: "0.2"\nid: [BW\n', 'schema_version: "0.2"\npublished: 2026-02-30\n'],
 )
 def test_readme_example_must_be_valid_yaml(repo: Path, block: str) -> None:
     (repo / vn.README_FILE).write_text(f"```yaml\n{block}```\n", encoding="utf-8")

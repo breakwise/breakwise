@@ -7,7 +7,7 @@
 
 **An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
 
-> **Status: early.** This repository holds the notice format (v0.1), the first notice and the `breakwise` package.
+> **Status: early.** This repository holds the notice format (v0.2), the first notice and the `breakwise` package.
 > Its first release on PyPI shows notices offline; finding and fixing affected code comes next. Contributions are welcome.
 
 ## The problem
@@ -43,11 +43,11 @@ AI coding agents will be able to query the registry through an MCP server.
 
 ```yaml
 ---
-schema_version: "0.1"
+schema_version: "0.2"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
-modified: "2026-10-22"
+modified: "2026-10-23"
 package:
   ecosystem: PyPI
   name: pydantic-ai
@@ -75,7 +75,7 @@ references:
 ```
 
 Every field is described in [docs/notice-format.md](docs/notice-format.md),
-and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the format for tools.
+and [schema/notice-0.2.schema.json](schema/notice-0.2.schema.json) defines the format for tools.
 
 ## Install
 
