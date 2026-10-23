@@ -1036,6 +1036,23 @@ def test_main_says_when_there_is_nothing_to_verify(
 
 
 @posix_only
+def test_main_with_all_verifies_every_notice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    verified: list[Path] = []
+
+    def fine(path: Path, python: str) -> list[ve.Result]:
+        verified.append(path)
+        return []
+
+    monkeypatch.setattr(ve, "verify_notice", fine)
+    assert ve.main(["--all"]) == 0
+    assert verified == ve.all_notices(REPO_ROOT)
+    assert verified
+    assert capsys.readouterr().out.endswith(f"({len(verified)} notice(s)).\n")
+
+
+@posix_only
 @pytest.mark.parametrize("in_github", [True, False])
 def test_main_prints_results_and_annotations(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], in_github: bool
@@ -1049,7 +1066,8 @@ def test_main_prints_results_and_annotations(
 
     monkeypatch.setattr(ve, "verify_notice", fake_verify)
     monkeypatch.setenv("GITHUB_ACTIONS", "true" if in_github else "false")
-    assert ve.main(["--all"]) == 1
+    # One notice, so that the counts don't depend on how many notices the registry holds.
+    assert ve.main([str(REAL_NOTICE)]) == 1
     out = capsys.readouterr().out
     rel = REAL_NOTICE.relative_to(REPO_ROOT).as_posix()
     assert (
@@ -1072,7 +1090,7 @@ def test_main_counts_notices_that_cannot_be_verified(
 
     monkeypatch.setattr(ve, "verify_notice", broken)
     monkeypatch.setenv("GITHUB_ACTIONS", "true" if in_github else "false")
-    assert ve.main(["--all"]) == 1
+    assert ve.main([str(REAL_NOTICE)]) == 1
     out = capsys.readouterr().out
     rel = REAL_NOTICE.relative_to(REPO_ROOT).as_posix()
     assert "  FAIL  demo is not on PyPI.\n" in out

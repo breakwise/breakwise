@@ -1,0 +1,31 @@
+---
+schema_version: "0.2"
+id: BW-2026-0002
+status: verified
+published: "2026-10-23"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "0.4.4"
+summary: The mcp_servers argument of Agent was renamed to toolsets, and the old name was removed in 2.0.0b1.
+rename:
+  keyword_of:
+    - pydantic_ai.Agent
+  from: mcp_servers
+  to: toolsets
+example:
+  before: |
+    from pydantic_ai import Agent
+
+    agent = Agent("test", mcp_servers=[])
+  after: |
+    from pydantic_ai import Agent
+
+    agent = Agent("test", toolsets=[])
+references:
+  - https://pydantic.dev/docs/ai/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.4.4/pydantic_ai_slim/pydantic_ai/agent.py
