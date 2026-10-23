@@ -52,7 +52,8 @@ flowchart LR
 | Verifier | Runs every example on real releases from PyPI | Built |
 | Index | Publishes the registry as static JSON for clients | Next |
 | Engine analysis | Finds the code that a notice affects | Next |
-| `explain` and `scan` | Show a notice, and report the code that an upgrade breaks | Next |
+| `explain` | Shows a notice offline, from the notices bundled with the package | Built (0.1.0) |
+| `scan` | Reports the code that an upgrade breaks | Next |
 | MCP server | Gives coding agents the registry and the engine | Planned |
 | Engine fixes, `fix` and `upgrade` | Rewrite the affected code, alone or as a two-step upgrade | Planned |
 | GitHub Action | Comments tested fixes on Dependabot and Renovate pull requests | Planned |
@@ -123,7 +124,7 @@ This is also a rule for authors, which format v0.2 adds to [docs/notice-format.m
 
 ### Command line (Next)
 
-- `breakwise explain BW-2026-0001` shows a notice. It comes first, in the release that opens phase 1, and works offline from the notices bundled with the package.
+- `breakwise explain BW-2026-0001` shows a notice. It came first, in release 0.1.0, and works offline from the notices bundled with the package.
 - `breakwise scan` reports the code that an upgrade breaks and changes nothing. Its exit code says whether anything applies, so CI can use it as a check.
 - `breakwise fix` (Planned) shows the diff of the certain fixes, then writes it when the user confirms or passes `--write`.
 - `breakwise upgrade pydantic-ai` (Planned) runs the two-step upgrade, with the project's tests after each step.
@@ -224,7 +225,7 @@ When the engine starts, the notice model that the validator and the verifier sha
 
 Writing notices is ongoing work, not a phase. Notices for LangChain and the OpenAI Python SDK start after phase 1 and continue alongside the other phases, and the draft generator in phase 6 speeds them up.
 
-PyPI can't reserve a name, and this document makes the name public, so phase 1 starts with a small but real release: the package bundles a copy of the notices, and `breakwise explain` works offline. The index must have its final URL before the first release that downloads it.
+PyPI can't reserve a name, and this document makes the name public, so phase 1 started with a small but real release, 0.1.0: the package bundles a copy of the notices, and `breakwise explain` works offline. The index must have its final URL before the first release that downloads it.
 
 ## Looking further
 

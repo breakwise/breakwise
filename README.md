@@ -7,8 +7,8 @@
 
 **An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
 
-> **Status: early.** This repository holds the notice format (v0.1) and the first notice.
-> The tool that finds and fixes affected code comes next. Contributions are welcome.
+> **Status: early.** This repository holds the notice format (v0.1), the first notice and the `breakwise` package.
+> Its first release on PyPI shows notices offline; finding and fixing affected code comes next. Contributions are welcome.
 
 ## The problem
 
@@ -103,7 +103,7 @@ Finding the code that an upgrade breaks comes next; see the [roadmap](#roadmap).
 
 - [x] Notice format v0.1 and its JSON Schema
 - [x] Check every notice and run its examples on real package versions, on each pull request
-- [ ] A first release on PyPI: `breakwise explain` shows any notice, offline
+- [x] A first release on PyPI: `breakwise explain` shows any notice, offline
 - [ ] Format v0.2, the pydantic-ai V2 notices and a published index
 - [ ] `breakwise scan`: report the code that an upgrade breaks
 - [ ] MCP server for AI coding agents
