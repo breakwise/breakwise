@@ -116,9 +116,11 @@ The phases, and why Breakwise is built this way, are in [docs/architecture.md](d
 
 ## Contributing
 
-Did an upgrade break your code? Open an issue with the package name, the version and a link to the changelog,
-or add a notice yourself in a pull request following [docs/notice-format.md](docs/notice-format.md).
+Did an upgrade break your code? [Request a notice](https://github.com/breakwise/breakwise/issues/new?template=request-notice.yml),
+or add one yourself in a pull request: [CONTRIBUTING.md](.github/CONTRIBUTING.md) explains how.
 New notices start as `draft` until a maintainer verifies them.
+Everyone who takes part follows the [code of conduct](.github/CODE_OF_CONDUCT.md),
+and security problems are reported privately, as the [security policy](.github/SECURITY.md) explains.
 
 ## Development
 
@@ -144,5 +146,6 @@ To update it, change its version in `package.json`, then run `npm install --pack
 
 ## License
 
-- Code and schema: [Apache-2.0](LICENSE)
+- Code, schema and docs: [Apache-2.0](LICENSE)
 - Notices in [`notices/`](notices/): [CC BY 4.0](notices/LICENSE.md)
+- The [code of conduct](.github/CODE_OF_CONDUCT.md), adapted from the Contributor Covenant 3.0: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)

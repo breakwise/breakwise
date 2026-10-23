@@ -1,0 +1,6 @@
+---
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/breakwise/breakwise/security/advisories/new
+    about: Report it privately, not in a public issue. The security policy has the details.

@@ -9,5 +9,5 @@ You may copy, share and adapt them for any purpose, including commercially,
 as long as you give credit (for example: "Data from the Breakwise registry, CC BY 4.0"),
 link to the license, and say if you changed anything.
 
-Everything else in this repository, including the schema in `schema/`,
-is licensed separately under [Apache-2.0](../LICENSE).
+Everything else in this repository, including the code, the schema and the docs, is [Apache-2.0](../LICENSE),
+except the [code of conduct](../.github/CODE_OF_CONDUCT.md), which is CC BY-SA 4.0.

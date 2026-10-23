@@ -1,0 +1,56 @@
+---
+name: Request a notice
+description: An upgrade broke your code. Ask for a notice about the change.
+title: "Notice: "
+labels: [notice]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One request per breaking change, please.
+        Check the [notices](https://github.com/breakwise/breakwise/tree/main/notices) first.
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      description: Its name on PyPI.
+      placeholder: pydantic-ai
+    validations:
+      required: true
+  - type: input
+    id: breaks-in
+    attributes:
+      label: Release that broke your code
+      description: The first release in which the old code stopped working, if you know it.
+      placeholder: "2.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: before
+    attributes:
+      label: Code that used to work
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: after
+    attributes:
+      label: Code that works now, if you know it
+      render: python
+  - type: input
+    id: source
+    attributes:
+      label: Official source
+      description: A link to the package's changelog, release notes, docs or source code that describes the change.
+      placeholder: https://
+    validations:
+      required: true
+  - type: dropdown
+    id: author
+    attributes:
+      label: Can you write the notice?
+      options:
+        - "Yes, I'll open a pull request"
+        - "No, I'd like someone else to write it"
+    validations:
+      required: true

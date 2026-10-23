@@ -1,0 +1,50 @@
+---
+name: Report a bug
+description: Something in Breakwise doesn't work as it should, or a notice is wrong.
+labels: [bug]
+body:
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part
+      options:
+        - The breakwise command
+        - tools/validate_notices.py
+        - tools/verify_examples.py
+        - A notice
+        - CI or the release workflow
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The output of `breakwise --version`, or the commit you used.
+      placeholder: breakwise 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: What you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Python and operating system
+      placeholder: Python 3.12 on Ubuntu 24.04
