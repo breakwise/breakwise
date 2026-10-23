@@ -77,6 +77,16 @@ references:
 Every field is described in [docs/notice-format.md](docs/notice-format.md),
 and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the format for tools.
 
+## Install
+
+```sh
+pip install breakwise
+breakwise explain BW-2026-0001
+```
+
+The package comes with a copy of the notices, so `breakwise explain` works offline.
+Finding the code that an upgrade breaks comes next; see the [roadmap](#roadmap).
+
 ## Repository layout
 
 | Path | Contents |
@@ -84,9 +94,10 @@ and [schema/notice-0.1.schema.json](schema/notice-0.1.schema.json) defines the f
 | [`notices/`](notices/) | The registry: one YAML file per breaking change |
 | [`docs/`](docs/) | Documentation: the [notice format](docs/notice-format.md) and the [architecture](docs/architecture.md) |
 | [`schema/`](schema/) | JSON Schema for notices |
+| [`src/breakwise/`](src/breakwise/) | The `breakwise` package and its command line |
 | [`tools/`](tools/) | Scripts that check notices and run their examples on real package versions |
-| [`tests/`](tests/) | Tests for those scripts |
-| [`.github/workflows/`](.github/workflows/) | The checks that run on every pull request |
+| [`tests/`](tests/) | Tests for the package and the scripts |
+| [`.github/workflows/`](.github/workflows/) | The checks that run on every pull request, and the release to PyPI |
 
 ## Roadmap
 

@@ -50,6 +50,7 @@ jobs:
         run: python tools/validate_notices.py
       - name: Build the package and run it
         # The wheel must hold the notices and both licenses, and the command must work from it.
+        # release.yml repeats these checks on the files it publishes.
         run: |
           python -m build --no-isolation --outdir "$RUNNER_TEMP/dist"
           wheels=("$RUNNER_TEMP"/dist/*.whl)
