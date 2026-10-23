@@ -551,7 +551,7 @@ FAKE_VERSIONS = {
 
 FAKE_NOTICE = """\
 ---
-schema_version: "0.1"
+schema_version: "0.2"
 id: BW-2026-9001
 status: draft
 published: "2026-10-21"

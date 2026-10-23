@@ -47,7 +47,7 @@ flowchart LR
 
 | Part | Role | Status |
 | --- | --- | --- |
-| Notice format | Describes one breaking change, with tested examples | Built (v0.1), v0.2 next |
+| Notice format | Describes one breaking change, with tested examples | Built (v0.2) |
 | Validator | Checks every notice without running code | Built |
 | Verifier | Runs every example on real releases from PyPI | Built |
 | Index | Publishes the registry as static JSON for clients | Next |
