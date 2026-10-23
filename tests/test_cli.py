@@ -196,8 +196,6 @@ NON_ASCII = REMOVAL.replace("id: BW-2026-0002", "id: BW-2026-0004").replace(
     "summary: demo.legacy() was removed in 2.0.0 → call demo.modern().",
 )
 
-posix_only = pytest.mark.skipif(os.name != "posix", reason="a closed pipe raises SIGPIPE on POSIX")
-
 
 @pytest.fixture
 def bundled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -460,10 +458,11 @@ def test_other_output_errors_are_not_hidden(
         os.close(fd)
 
 
-@posix_only
 def test_a_reader_that_leaves_early_gets_141_and_no_traceback(bundled: Path) -> None:
-    # The pipe is closed before anything is read, as with `| head -0`. -I ignores
-    # PYTHONIOENCODING and the rest of the environment.
+    # A real process whose pipe is closed before anything is read, as with `| head -c 0`.
+    # Python ignores SIGPIPE, so this raises BrokenPipeError on Linux and macOS, and
+    # OSError with EINVAL on Windows. -I ignores PYTHONIOENCODING and the rest of the
+    # environment.
     code = (
         "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
         "from breakwise import cli, notices; notices.DATA = Path(sys.argv[2]); "
