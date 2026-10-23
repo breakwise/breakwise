@@ -541,7 +541,7 @@ def test_rename_examples_may_use_names_through_modules(repo: Path) -> None:
         repo,
         AFTER_BLOCK,
         "    from pydantic_ai.models import openai\n\n"
-        '    model = openai.OpenAIChatModel("gpt-5")  # was OpenAIModel\n',
+        '    model = openai.OpenAIChatModel("gpt-5")  # OpenAIModel\n',
     )
     assert problems_in(repo) == []
 
@@ -713,6 +713,12 @@ def test_renamed_keywords_must_be_passed(
 def test_a_variable_may_have_the_old_keyword_name(keyword_repo: Path) -> None:
     edit(
         keyword_repo,
+        KEYWORD_BEFORE,
+        "    from pydantic_ai import Agent\n\n    mcp_servers = []\n"
+        '    agent = Agent("test", mcp_servers=mcp_servers)\n',
+    )
+    edit(
+        keyword_repo,
         KEYWORD_AFTER,
         "    from pydantic_ai import Agent\n\n    mcp_servers = []\n"
         '    agent = Agent("test", toolsets=mcp_servers)\n',
@@ -727,6 +733,7 @@ def test_keywords_of_several_callables_and_of_methods(keyword_repo: Path) -> Non
         "    - pydantic_ai.Agent\n    - pydantic_ai.Agent.run_sync\n",
     )
     edit(keyword_repo, KEYWORD_BEFORE, '    agent.run_sync("hi", mcp_servers=[])\n')
+    edit(keyword_repo, KEYWORD_AFTER, '    agent.run_sync("hi", toolsets=[])\n')
     assert problems_in(keyword_repo) == []
 
     edit(keyword_repo, '    agent.run_sync("hi", mcp_servers=[])\n', '    agent.run_sync("hi")\n')
@@ -797,6 +804,119 @@ def test_keyword_names_are_not_python_keywords(keyword_repo: Path) -> None:
 )
 def test_passed_keywords(code: str, callables: set[str], keywords: set[str]) -> None:
     assert vn.passed_keywords(code, callables) == keywords
+
+
+# --- example.after is the fix of example.before -------------------------------
+
+
+@pytest.mark.parametrize(
+    ("code", "fixed"),
+    [
+        pytest.param("from a import Old\nx = Old()\n", "from a import New\nx = New()\n", id="name"),
+        pytest.param("import a.Old\nx = a.Old.f()\n", "import a.New\nx = a.New.f()\n", id="module"),
+        pytest.param(
+            "from a.Old import f\nfrom a.Old import *\n",
+            "from a.New import f\nfrom a.New import *\n",
+            id="module of an import",
+        ),
+        pytest.param("from a import Old as O\n", "from a import New as O\n", id="alias"),
+        pytest.param("Old.Old\n", "New.New\n", id="twice on a line"),
+        pytest.param("f().Old\n", "f().New\n", id="attribute of a call"),
+        pytest.param("x = (a\n     .Old())\n", "x = (a\n     .New())\n", id="over two lines"),
+        pytest.param('t = "é"; Old()\n', 't = "é"; New()\n', id="after non-ASCII text"),
+        pytest.param(
+            "Old()  # Old\ns = 'Old'\n", "New()  # Old\ns = 'Old'\n", id="comment and string"
+        ),
+        pytest.param("f(Old=1)\ndef Old(): pass\n", "f(Old=1)\ndef Old(): pass\n", id="not uses"),
+    ],
+)
+def test_apply_rename_changes_exactly_what_uses_sees(code: str, fixed: str) -> None:
+    assert vn.apply_rename(code, "Old", "New") == fixed
+    assert not vn.uses(fixed, "Old")
+
+
+@pytest.mark.parametrize(
+    ("code", "fixed"),
+    [
+        ("Agent(mcp_servers=[], x=1)\n", "Agent(toolsets=[], x=1)\n"),
+        ("agent.run(\n    mcp_servers=[],\n)\n", "agent.run(\n    toolsets=[],\n)\n"),
+        ('t = "é"; Agent(mcp_servers=[])\n', 't = "é"; Agent(toolsets=[])\n'),
+        ("other(mcp_servers=[])\n", "other(mcp_servers=[])\n"),
+        ('Agent(**{"mcp_servers": []})\n', 'Agent(**{"mcp_servers": []})\n'),
+    ],
+)
+def test_apply_keyword_rename_changes_exactly_what_passed_keywords_sees(
+    code: str, fixed: str
+) -> None:
+    callables = {"Agent", "run"}
+    assert vn.apply_keyword_rename(code, callables, "mcp_servers", "toolsets") == fixed
+    assert "mcp_servers" not in vn.passed_keywords(fixed, callables)
+
+
+FIX = "example.after must be example.before with the rename applied, and nothing else"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "starts", "detail"),
+    [
+        pytest.param(
+            AFTER_BLOCK,
+            AFTER_BLOCK + "    print(model)\n",
+            "    print(model)",
+            "line 4 is extra",
+            id="extra line",
+        ),
+        pytest.param(
+            '    model = OpenAIChatModel("gpt-5")',
+            '    model = OpenAIChatModel( "gpt-5" )',
+            "    model = OpenAIChatModel(",
+            "line 3 should be 'model = OpenAIChatModel(\"gpt-5\")'",
+            id="other formatting",
+        ),
+        pytest.param(
+            AFTER_BLOCK,
+            "    from pydantic_ai.models.openai import OpenAIChatModel\n"
+            '    model = OpenAIChatModel("gpt-5")\n',
+            "    model = OpenAIChatModel",
+            "line 2 should be ''",
+            id="missing line",
+        ),
+    ],
+)
+def test_after_must_be_the_fix_of_before(
+    repo: Path, old: str, new: str, starts: str, detail: str
+) -> None:
+    edit(repo, old, new)
+    assert problems_in(repo) == [at(repo, starts, f"{FIX}: {detail}.")]
+
+
+def test_after_of_a_renamed_keyword_must_be_the_fix_of_before(keyword_repo: Path) -> None:
+    edit(keyword_repo, 'Agent("test", toolsets=[])', 'Agent("other", toolsets=[])')
+    detail = "line 3 should be 'agent = Agent(\"test\", toolsets=[])'"
+    assert problems_in(keyword_repo) == [
+        at(keyword_repo, '    agent = Agent("other"', f"{FIX}: {detail}.")
+    ]
+
+
+def test_a_missing_final_newline_is_reported(repo: Path) -> None:
+    edit(repo, "  after: |\n", "  after: |-\n")
+    message = f"{FIX}: only the newline at the end differs."
+    assert problems_in(repo) == [at(repo, "  after:", message)]
+
+
+def test_a_move_to_another_module_is_left_for_the_engine(repo: Path) -> None:
+    # Renamed and moved: the fix also changes the import, which only the engine can do.
+    edit(
+        repo,
+        "  to: pydantic_ai.models.openai.OpenAIChatModel",
+        "  to: pydantic_ai.models.chat.OpenAIChatModel",
+    )
+    edit(
+        repo,
+        "    from pydantic_ai.models.openai import OpenAIChatModel\n",
+        "    from pydantic_ai.models.chat import OpenAIChatModel\n",
+    )
+    assert problems_in(repo) == []
 
 
 # --- README -------------------------------------------------------------------

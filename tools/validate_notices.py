@@ -25,7 +25,10 @@ checks that:
   attributes count as uses; comments, strings and keyword arguments do not,
 - for a renamed keyword argument (``rename.keyword_of``), the names are not
   Python keywords, ``example.before`` passes the old keyword to one of the
-  callables, and ``example.after`` passes the new keyword and not the old one.
+  callables, and ``example.after`` passes the new keyword and not the old one,
+- a rename's ``example.after`` is ``example.before`` with the rename applied, and
+  nothing else, when the rename stays in one module or renames a keyword
+  argument. A move to another module is left for the engine to check.
 
 It also checks that every notice shown in ``README.md`` matches its file exactly.
 
@@ -39,11 +42,14 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import io
+import itertools
 import json
 import keyword
 import os
 import re
 import sys
+import tokenize
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,35 +204,100 @@ def distinguishing_names(old: str, new: str) -> tuple[str, str]:
     return old_module, new_module
 
 
-def used_names(code: str) -> set[tuple[str, ...]]:
-    """Return the names that Python code uses, as dotted paths split into parts.
+# Where a name is written in code: a 1-based line and a 0-based character column.
+Place = tuple[int, int]
+Positioned = ast.expr | ast.stmt | ast.alias | ast.keyword
 
-    ``import a.b``, ``from a import b`` and ``a.b`` all give ``("a", "b")``.
+
+@dataclass(frozen=True)
+class NameUse:
+    """A dotted name that code uses, and where each of its parts is written.
+
+    ``places`` has one entry for each part: its place, or None for the ``*``
+    of ``from a import *``.
+    """
+
+    parts: tuple[str, ...]
+    places: tuple[Place | None, ...]
+
+
+class _Source:
+    """Places in Python code: ast's UTF-8 offsets as character columns, and the name tokens."""
+
+    def __init__(self, code: str) -> None:
+        self.lines = code.split("\n")
+        tokens = tokenize.generate_tokens(io.StringIO(code).readline)
+        self.names = [
+            (token.start, token.string) for token in tokens if token.type == tokenize.NAME
+        ]
+
+    def start(self, node: Positioned) -> Place:
+        return node.lineno, self._column(node.lineno, node.col_offset)
+
+    def end(self, node: Positioned) -> Place:
+        line = cast("int", node.end_lineno)
+        return line, self._column(line, cast("int", node.end_col_offset))
+
+    def names_in(self, start: Place, end: Place) -> list[Place]:
+        """The places of the names from ``start`` up to ``end``, except ``from`` and ``import``."""
+        return [place for place, name in self.names if start <= place < end and name not in IMPORT]
+
+    def _column(self, line: int, offset: int) -> int:
+        return len(self.lines[line - 1].encode("utf-8")[:offset].decode("utf-8"))
+
+
+IMPORT = frozenset({"from", "import"})
+
+
+def name_uses(code: str) -> list[NameUse]:
+    """Return the names that Python code uses, with the places of their parts.
+
+    ``import a.b``, ``from a import b`` and ``a.b`` all use ``("a", "b")``.
     Comments, strings, keyword arguments and definitions are not uses.
     The code must be valid Python.
     """
-    names: set[tuple[str, ...]] = set()
+    source = _Source(code)
+    found: list[NameUse] = []
     for node in ast.walk(ast.parse(code)):
         if isinstance(node, ast.Import):
-            names.update(tuple(alias.name.split(".")) for alias in node.names)
+            for alias in node.names:
+                parts = tuple(alias.name.split("."))
+                places = source.names_in(source.start(alias), source.end(alias))[: len(parts)]
+                found.append(NameUse(parts, tuple(places)))
         elif isinstance(node, ast.ImportFrom):
             module = tuple(node.module.split(".")) if node.module else ()
-            names.update((*module, alias.name) for alias in node.names)
+            module_places = source.names_in(source.start(node), source.start(node.names[0]))
+            for alias in node.names:
+                name = source.names_in(source.start(alias), source.end(alias))
+                place = name[0] if name else None
+                found.append(NameUse((*module, alias.name), (*module_places, place)))
         elif isinstance(node, ast.Name):
-            names.add((node.id,))
+            found.append(NameUse((node.id,), (source.start(node),)))
         elif isinstance(node, ast.Attribute):
-            names.add(_attribute_path(node) or (node.attr,))
-    return names
+            found.append(_attribute_use(node, source))
+    return found
 
 
-def _attribute_path(node: ast.Attribute) -> tuple[str, ...] | None:
-    """``a.b.c`` gives ``("a", "b", "c")``; ``f().c``, which does not start with a name, None."""
-    parts = [node.attr]
+def _attribute_use(node: ast.Attribute, source: _Source) -> NameUse:
+    """``a.b.c`` uses ``("a", "b", "c")``, and ``f().c``, which starts with a call, ``("c",)``."""
+    chain = [node]
     value = node.value
     while isinstance(value, ast.Attribute):
-        parts.append(value.attr)
+        chain.append(value)
         value = value.value
-    return (value.id, *reversed(parts)) if isinstance(value, ast.Name) else None
+    # An attribute ends with its name, so the name starts that many characters before the end.
+    attributes = [(link.attr, source.end(link)) for link in reversed(chain)]
+    places = [(line, column - len(attr)) for attr, (line, column) in attributes]
+    if isinstance(value, ast.Name):
+        return NameUse(
+            (value.id, *(attr for attr, _ in attributes)), (source.start(value), *places)
+        )
+    return NameUse((node.attr,), (places[-1],))
+
+
+def used_names(code: str) -> set[tuple[str, ...]]:
+    """Return the names that Python code uses, as dotted paths split into parts."""
+    return {use.parts for use in name_uses(code)}
 
 
 def uses(code: str, name: str) -> bool:
@@ -242,6 +313,34 @@ def uses(code: str, name: str) -> bool:
     if len(parts) == 1:
         return any(name in path for path in used_names(code))
     return any(path[: len(parts)] == parts for path in used_names(code))
+
+
+# This fix is temporary. Once the engine can fix code (phase 4 in docs/architecture.md),
+# the validator uses the engine's fix instead, so that there is only one implementation.
+def apply_rename(code: str, old: str, new: str) -> str:
+    """Rename ``old``, a name without dots, wherever :func:`uses` sees it, and nowhere else."""
+    places = {
+        place
+        for use in name_uses(code)
+        for part, place in zip(use.parts, use.places, strict=True)
+        if part == old and place is not None
+    }
+    return _replace(code, places, old, new)
+
+
+def apply_keyword_rename(code: str, callables: Collection[str], old: str, new: str) -> str:
+    """Rename the keyword argument ``old`` wherever :func:`passed_keywords` sees it."""
+    places = {place for name, place in keyword_uses(code, callables) if name == old}
+    return _replace(code, places, old, new)
+
+
+def _replace(code: str, places: Iterable[Place], old: str, new: str) -> str:
+    lines = code.split("\n")
+    # From the end, so that each replacement leaves the places before it where they are.
+    for line, column in sorted(places, reverse=True):
+        text = lines[line - 1]
+        lines[line - 1] = text[:column] + new + text[column + len(old) :]
+    return "\n".join(lines)
 
 
 def load_validator(root: Path) -> Draft202012Validator:
@@ -473,18 +572,31 @@ def _check_rename(notice: Notice) -> Iterator[Problem]:
         return
     if "keyword_of" in rename:
         yield from _check_keyword_rename(notice, old, new, rename["keyword_of"])
-        return
+    else:
+        yield from _check_name_rename(notice, old, new)
+
+
+def _check_name_rename(notice: Notice, old: str, new: str) -> Iterator[Problem]:
     old_name, new_name = distinguishing_names(old, new)
     before, after = notice.data["example"]["before"], notice.data["example"]["after"]
+    problems = []
     if not uses(before, old_name):
-        yield notice.problem("example.before", f"example.before must use the old name {old_name}.")
+        problems.append(
+            notice.problem("example.before", f"example.before must use the old name {old_name}.")
+        )
     if not uses(after, new_name):
-        yield notice.problem("example.after", f"example.after must use the new name {new_name}.")
+        problems.append(
+            notice.problem("example.after", f"example.after must use the new name {new_name}.")
+        )
     # When only the module changed, the old module may still be needed for other names.
     renamed = old.rpartition(".")[2] != new.rpartition(".")[2]
     if renamed and uses(after, old_name):
         message = f"example.after must not use the old name {old_name}."
-        yield notice.problem("example.after", message)
+        problems.append(notice.problem("example.after", message))
+    yield from problems
+    # The validator applies a rename within one module. A move to another waits for the engine.
+    if not problems and old.rpartition(".")[0] == new.rpartition(".")[0]:
+        yield from _check_fix(notice, apply_rename(before, old_name, new_name))
 
 
 def _check_keyword_rename(
@@ -493,28 +605,66 @@ def _check_keyword_rename(
     """The examples pass the old keyword before the change, and only the new one after it."""
     names = {callable_.rpartition(".")[2] for callable_ in callables}
     listed = " or ".join(callables)
-    before = passed_keywords(notice.data["example"]["before"], names)
-    after = passed_keywords(notice.data["example"]["after"], names)
-    if old not in before:
-        yield notice.problem("example.before", f"example.before must pass {old}= to {listed}.")
-    if new not in after:
-        yield notice.problem("example.after", f"example.after must pass {new}= to {listed}.")
-    if old in after:
-        yield notice.problem("example.after", f"example.after must not pass {old}= to {listed}.")
+    before = notice.data["example"]["before"]
+    passed_before = passed_keywords(before, names)
+    passed_after = passed_keywords(notice.data["example"]["after"], names)
+    problems = []
+    if old not in passed_before:
+        problems.append(
+            notice.problem("example.before", f"example.before must pass {old}= to {listed}.")
+        )
+    if new not in passed_after:
+        problems.append(
+            notice.problem("example.after", f"example.after must pass {new}= to {listed}.")
+        )
+    if old in passed_after:
+        problems.append(
+            notice.problem("example.after", f"example.after must not pass {old}= to {listed}.")
+        )
+    yield from problems
+    if not problems:
+        yield from _check_fix(notice, apply_keyword_rename(before, names, old, new))
 
 
-def passed_keywords(code: str, callables: Collection[str]) -> set[str]:
-    """Return the keyword arguments that Python code passes to the named callables.
+def _check_fix(notice: Notice, fixed: str) -> Iterator[Problem]:
+    """``example.after`` must be ``fixed``, which is ``example.before`` with the rename applied."""
+    after = notice.data["example"]["after"]
+    if fixed == after:
+        return
+    start = "example.after must be example.before with the rename applied, and nothing else"
+    pairs = itertools.zip_longest(fixed.splitlines(), after.splitlines())
+    for number, (expected, actual) in enumerate(pairs, start=1):
+        if expected != actual:
+            detail = "is extra" if expected is None else f"should be {expected!r}"
+            yield Problem(
+                notice.rel,
+                _code_line(notice.tree, "after", number),
+                f"{start}: line {number} {detail}.",
+            )
+            return
+    yield notice.problem("example.after", f"{start}: only the newline at the end differs.")
+
+
+def keyword_uses(code: str, callables: Collection[str]) -> list[tuple[str, Place]]:
+    """Return the keyword arguments that code passes to the named callables, and their places.
 
     A call matches by the last part of its name, so ``Agent(...)``,
     ``pydantic_ai.Agent(...)`` and ``agent.run(...)`` match ``Agent`` and ``run``.
     Keyword arguments passed through ``**`` are not counted.
     """
-    keywords: set[str] = set()
-    for node in ast.walk(ast.parse(code)):
-        if isinstance(node, ast.Call) and _called_name(node.func) in callables:
-            keywords.update(argument.arg for argument in node.keywords if argument.arg)
-    return keywords
+    source = _Source(code)
+    return [
+        (argument.arg, source.start(argument))
+        for node in ast.walk(ast.parse(code))
+        if isinstance(node, ast.Call) and _called_name(node.func) in callables
+        for argument in node.keywords
+        if argument.arg
+    ]
+
+
+def passed_keywords(code: str, callables: Collection[str]) -> set[str]:
+    """Return the names of the keyword arguments that :func:`keyword_uses` finds."""
+    return {name for name, _ in keyword_uses(code, callables)}
 
 
 def _called_name(function: ast.expr) -> str | None:

@@ -57,6 +57,9 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    With `rename.keyword_of`, it also covers a keyword argument whose name alone changed: same value, same meaning, same position.
    Then `example.before` passes the old keyword to one of the callables, and `example.after` passes the new keyword and not the old one.
    A call counts by the last part of its name, such as `Agent(...)` or `agent.run(...)`.
+   For a `rename`, `example.after` is exactly `example.before` with the rename applied, and nothing else.
+   The validator checks this when the rename stays in one module or renames a keyword argument.
+   A move to another module will be checked once the engine can fix code.
    A changed string, such as the model prefix `grok:` becoming `xai:`, is a `signature` change with `instructions`.
 4. **Tested examples.** On every pull request, `tools/verify_examples.py` installs real versions from PyPI
    and checks that `example.before` runs on the last stable release before `breaks_in` and fails on `breaks_in`,
@@ -77,7 +80,7 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
 
 - **0.2** (2026-10-23):
   - `rename.keyword_of` describes a renamed keyword argument, so that tools can fix it automatically.
-  - A `rename` can't have `instructions`.
+  - A `rename` can't have `instructions`, and its `example.after` is exactly `example.before` with the rename applied.
   - IDs have no extra leading zeros: `BW-2026-0001` and `BW-2026-10000`, but not `BW-2026-00001`.
   - A notice without `works_since` means that the first release of the new code is unknown.
   - A notice moves to 0.2 by changing `schema_version`. The schema of 0.1 stays as it was.
