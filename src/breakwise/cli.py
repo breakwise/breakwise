@@ -46,7 +46,11 @@ def render(notice: Notice) -> str:
         where += f" (also {', '.join(package['aliases'])})"
     change = data["type"]
     if change == "rename":
-        change += f" {data['rename']['from']} -> {data['rename']['to']}"
+        rename = data["rename"]
+        names = f"{rename['from']} -> {rename['to']}"
+        if "keyword_of" in rename:
+            names = f"the keyword argument {names} of {', '.join(rename['keyword_of'])}"
+        change += f" {names}"
     if data.get("works_since"):
         works_since = f"{data['works_since']}, so the fix can come before the upgrade"
     else:
