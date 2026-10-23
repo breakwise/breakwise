@@ -9,5 +9,4 @@ You may copy, share and adapt them for any purpose, including commercially,
 as long as you give credit (for example: "Data from the Breakwise registry, CC BY 4.0"),
 link to the license, and say if you changed anything.
 
-Everything else in this repository, including the schema in `schema/`,
-is licensed separately under [Apache-2.0](../LICENSE).
+The code and the schema in `schema/` are licensed separately under [Apache-2.0](../LICENSE).

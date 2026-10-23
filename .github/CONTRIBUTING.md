@@ -1,0 +1,51 @@
+# Contributing to Breakwise
+
+Thank you for helping. Breakwise is a registry of breaking changes in Python libraries, so the most useful contribution is a notice: one breaking change, with an example that runs on real releases.
+
+Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md). To report a security problem, see the [security policy](SECURITY.md).
+
+## Ask for a notice
+
+Did an upgrade break your code? [Request a notice](https://github.com/breakwise/breakwise/issues/new?template=request-notice.yml) with the package, the release that broke your code, and a link to an official source: the package's changelog, release notes, docs or source code.
+
+## Write a notice
+
+1. Read [the notice format](../docs/notice-format.md). It describes every field and rule.
+2. Take the next free ID, and add the notice as `notices/pypi/<package>/<id>.yaml`, with `status: draft`.
+3. Link only official sources of the package.
+4. Keep the examples as small as possible. They run offline, with fake API keys.
+5. Check the notice locally, then open a pull request. Its template has a checklist.
+
+A maintainer checks every notice against its sources and then sets `verified`.
+
+## Check your work locally
+
+You need Python 3.12 or later. The verifier also needs Linux or macOS and network access, and it should run on Python 3.12, because old releases of a package may not install on a newer Python.
+
+```sh
+python -m pip install --require-hashes -r requirements-dev.txt
+python tools/validate_notices.py
+python tools/verify_examples.py notices/pypi/<package>/<id>.yaml
+```
+
+The [Development section of the README](../README.md#development) lists every check that the pull request runs.
+
+## What the pull request checks do
+
+- **Validate notices** lints the code, the docs and the workflows, runs the tests with full coverage, validates every notice and builds the package.
+- **Test tools (Python 3.13)** and **Test tools (Python 3.14)** run the tests on newer Python.
+- **Verify examples** installs real releases from PyPI and runs the examples of the notices that the pull request changes.
+
+For contributors from outside the project, a maintainer approves each run before it starts.
+
+## Change the code
+
+- Every change in behavior comes with a test, and the tests cover every line and branch of `src/` and `tools/`.
+- The code passes ruff and mypy in strict mode.
+- Commit messages are in the imperative, such as "Add the notice for ...".
+
+## Licenses
+
+A contribution is licensed like the part of the repository it changes.
+Contributions to the code fall under section 5 of the [Apache License 2.0](../LICENSE), which the code is licensed under.
+Contributions to the notices are licensed under [CC BY 4.0](../notices/LICENSE.md), like the notices themselves.
