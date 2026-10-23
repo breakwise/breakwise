@@ -69,6 +69,10 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    and `example.after` must fail on the release just before `works_since`, so that both are the first such releases.
    For a `rename`, the error that stops `example.before` must name the old name,
    and the error that stops `example.after` must name the new name.
+   For a renamed keyword argument, every callable in `rename.keyword_of` must have `rename.to`
+   as an explicit parameter on `breaks_in` and on `works_since`, as `inspect.signature` shows it.
+   A callable that takes it only through `**kwargs` fails this check and doesn't belong in the list,
+   because `example.after` could run on it while the argument is ignored.
 5. **Offline examples.** Examples run without network access and with fake API keys,
    so they must not call real services: an example that fails after trying to reach the network fails the check.
    For a `behavior` change, use `assert` so that the example fails when the behavior differs.

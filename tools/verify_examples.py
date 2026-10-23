@@ -19,7 +19,12 @@ on real releases of its package:
 - on ``works_since``, when it is set, ``example.after`` must run, and on the
   release just before it, ``example.after`` must fail, so that ``works_since``
   is the first release on which it runs. For a rename, that exception must
-  name the new name.
+  name the new name;
+- for a renamed keyword argument, each callable in ``rename.keyword_of`` must
+  take ``rename.to`` as an explicit parameter on ``breaks_in`` and on
+  ``works_since``, as ``inspect.signature`` shows it. Taking it only through
+  ``**kwargs`` does not count, because then ``example.after`` can run although
+  the callable ignores the argument.
 
 Releases and their upload times come from PyPI's JSON Simple API (PEP 691 and
 PEP 700). Each version is installed with ``uv`` together with its dependencies
@@ -166,6 +171,9 @@ except BaseException as error:
     raise
 """
 
+# The exit code of signature_script() when the parameter is not explicit.
+NO_PARAMETER = 3
+
 Fetcher = Callable[[str], dict[Version, dt.datetime]]
 Installer = Callable[[str, Version, str, str, Path], Path]
 
@@ -181,6 +189,23 @@ class Check:
     version: Version
     example: str
     should_run: bool
+
+    @property
+    def label(self) -> str:
+        return f"example.{self.example}"
+
+
+@dataclass(frozen=True)
+class SignatureCheck:
+    """Check that a callable takes a keyword argument as an explicit parameter on one version."""
+
+    version: Version
+    target: str
+    keyword: str
+
+    @property
+    def label(self) -> str:
+        return f"signature of {self.target}"
 
 
 @dataclass(frozen=True)
@@ -212,7 +237,7 @@ class Run:
 
 @dataclass(frozen=True)
 class Result:
-    check: Check
+    check: Check | SignatureCheck
     passed: bool
     detail: str
 
@@ -418,6 +443,39 @@ def evaluate(  # noqa: PLR0911 - one return for each way an example can end
     return Result(check, True, f"fails as expected: {run.summary}")
 
 
+def signature_script(target: str, keyword: str) -> str:
+    """Return code that exits with NO_PARAMETER unless ``target`` takes ``keyword`` explicitly.
+
+    It runs like an example, so importing the package is offline too.
+    """
+    return f"""\
+import inspect
+import pkgutil
+import sys
+
+found = pkgutil.resolve_name({target!r})
+parameter = inspect.signature(found).parameters.get({keyword!r})
+explicit = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+if parameter is None or parameter.kind not in explicit:
+    sys.exit({NO_PARAMETER})
+"""
+
+
+def evaluate_signature(check: SignatureCheck, run: Run) -> Result:
+    """Compare how signature_script() ended with what the notice says."""
+    if run.returncode is None:
+        return Result(check, False, "did not finish in time, so it was stopped")
+    if run.returncode == 0:
+        return Result(check, True, f"takes {check.keyword} as an explicit parameter")
+    if run.returncode == NO_PARAMETER:
+        message = (
+            f"has no explicit parameter {check.keyword}, and taking it through **kwargs "
+            f"does not count. Check the versions, or remove {check.target} from rename.keyword_of."
+        )
+        return Result(check, False, message)
+    return Result(check, False, f"could not be checked: {run.summary}")
+
+
 @functools.cache
 def _validator() -> Draft202012Validator:
     return load_validator(REPO_ROOT)
@@ -445,7 +503,17 @@ def verify_notice(
     works_since = Version(notice["works_since"]) if "works_since" in notice else None
     # For a rename, each example must fail because of the name it uses, not another reason.
     expected_errors: dict[str, str | None] = {"before": None, "after": None}
-    if notice["type"] == "rename":
+    signature_checks: list[SignatureCheck] = []
+    if notice["type"] == "rename" and "keyword_of" in notice["rename"]:
+        rename = notice["rename"]
+        expected_errors = {"before": rename["from"], "after": rename["to"]}
+        versions = [breaks_in] if works_since is None else [breaks_in, works_since]
+        signature_checks = [
+            SignatureCheck(version, target, rename["to"])
+            for version in dict.fromkeys(versions)
+            for target in rename["keyword_of"]
+        ]
+    elif notice["type"] == "rename":
         old, new = distinguishing_names(notice["rename"]["from"], notice["rename"]["to"])
         expected_errors = {"before": old, "after": new}
 
@@ -455,17 +523,25 @@ def verify_notice(
     with tempfile.TemporaryDirectory(prefix="breakwise-") as tmp_name:
         tmp = Path(tmp_name).resolve()
         interpreters: dict[Version, Path] = {}
+
+        def interpreter(version: Version) -> Path:
+            if version not in interpreters:
+                cutoff = exclude_newer(releases[version])
+                target = tmp / f"venv-{version}"
+                interpreters[version] = installer(name, version, cutoff, python, target)
+            return interpreters[version]
+
         for number, check in enumerate(checks):
-            if check.version not in interpreters:
-                cutoff = exclude_newer(releases[check.version])
-                target = tmp / f"venv-{check.version}"
-                interpreters[check.version] = installer(name, check.version, cutoff, python, target)
             code = notice["example"][check.example]
             run = _shorten_paths(
-                run_example(interpreters[check.version], code, tmp / f"run-{number}"), tmp
+                run_example(interpreter(check.version), code, tmp / f"run-{number}"), tmp
             )
             expected_error = None if check.should_run else expected_errors[check.example]
             results.append(evaluate(check, run, expected_error))
+        for number, signature in enumerate(signature_checks):
+            code = signature_script(signature.target, signature.keyword)
+            run = run_example(interpreter(signature.version), code, tmp / f"signature-{number}")
+            results.append(evaluate_signature(signature, _shorten_paths(run, tmp)))
     return results
 
 
@@ -539,7 +615,7 @@ def report(paths: Sequence[Path], python: str, root: Path, in_github: bool) -> i
             continue
         for result in results:
             status = "ok  " if result.passed else "FAIL"
-            what = f"{result.check.version}  example.{result.check.example}"
+            what = f"{result.check.version}  {result.check.label}"
             print(f"  {status}  {what}: {result.detail}")
             if not result.passed:
                 failures += 1

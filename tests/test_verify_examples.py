@@ -540,6 +540,56 @@ def test_run_summary_is_one_short_line() -> None:
     assert ve.Run(1, "E" * 200).summary == "E" * 200
 
 
+@pytest.mark.parametrize(
+    ("returncode", "error", "passed", "detail"),
+    [
+        (0, "", True, "takes new as an explicit parameter"),
+        (None, "", False, "did not finish in time, so it was stopped"),
+        (
+            ve.NO_PARAMETER,
+            "SystemExit: 3\n",
+            False,
+            (
+                "has no explicit parameter new, and taking it through **kwargs does not count. "
+                "Check the versions, or remove demo.make from rename.keyword_of."
+            ),
+        ),
+        (
+            1,
+            "ModuleNotFoundError: No module named 'demo'\n",
+            False,
+            "could not be checked: ModuleNotFoundError: No module named 'demo'",
+        ),
+    ],
+)
+def test_evaluate_signature(returncode: int | None, error: str, passed: bool, detail: str) -> None:
+    check = ve.SignatureCheck(Version("2.0.0"), "demo.make", "new")
+    result = ve.evaluate_signature(check, ve.Run(returncode, "", error))
+    assert (result.check, result.passed, result.detail) == (check, passed, detail)
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("target", "keyword", "returncode"),
+    [
+        ("json.dumps", "indent", 0),  # keyword-only
+        ("textwrap.wrap", "width", 0),  # positional or keyword
+        ("argparse.ArgumentParser", "prog", 0),  # a class, by its __init__
+        ("textwrap.TextWrapper.wrap", "text", 0),  # a method
+        ("textwrap.wrap", "break_long_words", ve.NO_PARAMETER),  # only through **kwargs
+        ("json.dumps", "missing", ve.NO_PARAMETER),
+        ("builtins.divmod", "x", ve.NO_PARAMETER),  # positional-only
+        ("textwrap.missing", "text", 1),
+        ("missing_module.f", "text", 1),
+    ],
+)
+def test_signature_script_accepts_only_explicit_keyword_parameters(
+    tmp_path: Path, target: str, keyword: str, returncode: int
+) -> None:
+    run = ve.run_example(PYTHON, ve.signature_script(target, keyword), tmp_path)
+    assert run.returncode == returncode, run.error
+
+
 # --- A whole notice, offline --------------------------------------------------
 
 FAKE_VERSIONS = {
@@ -582,12 +632,13 @@ references:
 class FakeIndex:
     """Installs a tiny package called fakelib whose contents depend on the version."""
 
-    def __init__(self) -> None:
+    def __init__(self, versions: dict[str, str] = FAKE_VERSIONS) -> None:
+        self.versions = versions
         self.installed: list[tuple[str, str, str]] = []
 
     def releases(self, name: str) -> dict[Version, dt.datetime]:
         assert name == "fakelib"
-        return releases(*FAKE_VERSIONS)
+        return releases(*self.versions)
 
     def install(
         self, package: str, version: Version, cutoff: str, python: str, target: Path
@@ -595,7 +646,7 @@ class FakeIndex:
         self.installed.append((package, str(version), cutoff))
         subprocess.run([python, "-m", "venv", "--without-pip", str(target)], check=True)
         site = target / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
-        (site / "site-packages" / "fakelib.py").write_text(FAKE_VERSIONS[str(version)])
+        (site / "site-packages" / "fakelib.py").write_text(self.versions[str(version)])
         return target / "bin" / "python"
 
 
@@ -611,7 +662,7 @@ def verify(notice: Path, index: FakeIndex) -> list[str]:
         notice, sys.executable, fetch=index.releases, installer=index.install
     )
     return [
-        f"{'ok' if r.passed else 'FAIL'} {r.check.version} {r.check.example}: {r.detail}"
+        f"{'ok' if r.passed else 'FAIL'} {r.check.version} {r.check.label}: {r.detail}"
         for r in results
     ]
 
@@ -621,16 +672,16 @@ def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
     index = FakeIndex()
     site = f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
     assert verify(write_notice(tmp_path), index) == [
-        "ok 1.9.0 before: runs",
-        "ok 1.9.0 after: runs",
+        "ok 1.9.0 example.before: runs",
+        "ok 1.9.0 example.after: runs",
         (
-            "ok 2.0.0 before: fails as expected: ImportError: cannot import name 'Old' "
+            "ok 2.0.0 example.before: fails as expected: ImportError: cannot import name 'Old' "
             f"from 'fakelib' (<tmp>/venv-2.0.0/{site}/fakelib.py)"
         ),
-        "ok 2.0.0 after: runs",
-        "ok 1.5.0 after: runs",
+        "ok 2.0.0 example.after: runs",
+        "ok 1.5.0 example.after: runs",
         (
-            "ok 1.0.0 after: fails as expected: ImportError: cannot import name 'New' "
+            "ok 1.0.0 example.after: fails as expected: ImportError: cannot import name 'New' "
             f"from 'fakelib' (<tmp>/venv-1.0.0/{site}/fakelib.py)"
         ),
     ]
@@ -647,9 +698,9 @@ def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("breaks_in", "works_since", "failure"),
     [
-        ("1.9.0", "1.5.0", "FAIL 1.9.0 before: should fail on this version, but it ran"),
-        ("2.0.0", "1.0.0", "FAIL 1.0.0 after: should run, but failed: ImportError"),
-        ("2.0.0", "1.9.0", "FAIL 1.5.0 after: should fail on this version, but it ran"),
+        ("1.9.0", "1.5.0", "FAIL 1.9.0 example.before: should fail on this version, but it ran"),
+        ("2.0.0", "1.0.0", "FAIL 1.0.0 example.after: should run, but failed: ImportError"),
+        ("2.0.0", "1.9.0", "FAIL 1.5.0 example.after: should fail on this version, but it ran"),
     ],
 )
 def test_a_notice_with_wrong_versions_fails(
@@ -671,7 +722,7 @@ def test_breaks_in_must_be_the_first_release_that_breaks(
     failures = [line for line in lines if line.startswith("FAIL")]
     assert len(failures) == 1
     assert failures[0].startswith(
-        "FAIL 2.0.0b1 before: should run, but failed: ImportError: cannot import name 'Old'"
+        "FAIL 2.0.0b1 example.before: should run, but failed: ImportError: cannot import name 'Old'"
     )
 
 
@@ -682,7 +733,7 @@ def test_after_must_fail_because_of_the_new_name(
     monkeypatch.setitem(FAKE_VERSIONS, "1.0.0", "raise RuntimeError('broken')\n")
     lines = verify(write_notice(tmp_path), FakeIndex())
     assert [line for line in lines if line.startswith("FAIL")] == [
-        "FAIL 1.0.0 after: fails, but not because of New: RuntimeError: broken"
+        "FAIL 1.0.0 example.after: fails, but not because of New: RuntimeError: broken"
     ]
 
 
@@ -716,12 +767,154 @@ def test_any_failure_counts_for_changes_other_than_renames(tmp_path: Path) -> No
     notice.write_text(text, encoding="utf-8")
     lines = verify(notice, FakeIndex())
     assert [line.split(":")[0] for line in lines] == [
-        "ok 1.9.0 before",
-        "ok 1.9.0 after",
-        "ok 2.0.0 before",
-        "ok 2.0.0 after",
-        "ok 1.5.0 after",
-        "ok 1.0.0 after",
+        "ok 1.9.0 example.before",
+        "ok 1.9.0 example.after",
+        "ok 2.0.0 example.before",
+        "ok 2.0.0 example.after",
+        "ok 1.5.0 example.after",
+        "ok 1.0.0 example.after",
+    ]
+
+
+# --- A renamed keyword argument, offline --------------------------------------
+
+KEYWORD_VERSIONS = {
+    "1.0.0": "def make(*, old=None): pass\n",
+    "1.5.0": "def make(*, old=None, new=None): pass\n",
+    "1.9.0": "def make(*, old=None, new=None): pass\n",
+    "2.0.0": "def make(*, new=None): pass\n",
+}
+
+KEYWORD_NOTICE = """\
+---
+schema_version: "0.2"
+id: BW-2026-9002
+status: draft
+published: "2026-10-23"
+package:
+  ecosystem: PyPI
+  name: fakelib
+type: rename
+breaks_in: "2.0.0"
+{works_since}summary: The old argument of make was renamed to new, and old was removed in 2.0.0.
+rename:
+  keyword_of:
+    - fakelib.make
+  from: old
+  to: new
+example:
+  before: |
+    from fakelib import make
+
+    make(old=1)
+  after: |
+    from fakelib import make
+
+    make(new=1)
+references:
+  - https://example.com/changelog
+"""
+
+
+def write_keyword_notice(tmp_path: Path, works_since: str | None = "1.5.0") -> Path:
+    notice = tmp_path / "BW-2026-9002.yaml"
+    line = "" if works_since is None else f'works_since: "{works_since}"\n'
+    notice.write_text(KEYWORD_NOTICE.format(works_since=line), encoding="utf-8")
+    return notice
+
+
+@posix_only
+def test_a_correct_keyword_rename_passes_every_check(tmp_path: Path) -> None:
+    index = FakeIndex(KEYWORD_VERSIONS)
+    lines = verify(write_keyword_notice(tmp_path), index)
+    assert lines[:2] == ["ok 1.9.0 example.before: runs", "ok 1.9.0 example.after: runs"]
+    # Newer Pythons may add a suggestion such as "Did you mean 'new'?" to the error.
+    assert lines[2].startswith(
+        "ok 2.0.0 example.before: fails as expected: "
+        "TypeError: make() got an unexpected keyword argument 'old'"
+    )
+    assert lines[3:5] == ["ok 2.0.0 example.after: runs", "ok 1.5.0 example.after: runs"]
+    assert lines[5].startswith(
+        "ok 1.0.0 example.after: fails as expected: "
+        "TypeError: make() got an unexpected keyword argument 'new'"
+    )
+    assert lines[6:] == [
+        "ok 2.0.0 signature of fakelib.make: takes new as an explicit parameter",
+        "ok 1.5.0 signature of fakelib.make: takes new as an explicit parameter",
+    ]
+    # The signatures are checked in the environments the examples ran in.
+    assert [version for _, version, _ in index.installed] == ["1.9.0", "2.0.0", "1.5.0", "1.0.0"]
+
+
+@posix_only
+def test_without_works_since_only_breaks_in_has_its_signature_checked(tmp_path: Path) -> None:
+    lines = verify(write_keyword_notice(tmp_path, works_since=None), FakeIndex(KEYWORD_VERSIONS))
+    assert [line.split(":")[0] for line in lines] == [
+        "ok 1.9.0 example.before",
+        "ok 2.0.0 example.before",
+        "ok 2.0.0 example.after",
+        "ok 2.0.0 signature of fakelib.make",
+    ]
+
+
+@posix_only
+def test_a_keyword_taken_only_through_kwargs_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # example.after runs on 1.5.0, but make ignores the new argument there.
+    monkeypatch.setitem(KEYWORD_VERSIONS, "1.5.0", "def make(*, old=None, **kwargs): pass\n")
+    lines = verify(write_keyword_notice(tmp_path), FakeIndex(KEYWORD_VERSIONS))
+    assert [line for line in lines if line.startswith("FAIL")] == [
+        (
+            "FAIL 1.5.0 signature of fakelib.make: has no explicit parameter new, and taking it "
+            "through **kwargs does not count. Check the versions, or remove fakelib.make from "
+            "rename.keyword_of."
+        )
+    ]
+
+
+@posix_only
+def test_an_explicit_keyword_next_to_kwargs_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        KEYWORD_VERSIONS, "1.5.0", "def make(*, old=None, new=None, **kwargs): pass\n"
+    )
+    lines = verify(write_keyword_notice(tmp_path), FakeIndex(KEYWORD_VERSIONS))
+    assert all(line.startswith("ok") for line in lines)
+    assert len(lines) == 8
+
+
+@posix_only
+def test_every_callable_in_keyword_of_is_checked(tmp_path: Path) -> None:
+    notice = write_keyword_notice(tmp_path)
+    text = notice.read_text(encoding="utf-8")
+    text = text.replace("    - fakelib.make\n", "    - fakelib.make\n    - fakelib.build\n")
+    notice.write_text(text, encoding="utf-8")
+    lines = verify(notice, FakeIndex(KEYWORD_VERSIONS))
+    assert [line for line in lines if "signature" in line] == [
+        "ok 2.0.0 signature of fakelib.make: takes new as an explicit parameter",
+        (
+            "FAIL 2.0.0 signature of fakelib.build: could not be checked: "
+            "AttributeError: module 'fakelib' has no attribute 'build'"
+        ),
+        "ok 1.5.0 signature of fakelib.make: takes new as an explicit parameter",
+        (
+            "FAIL 1.5.0 signature of fakelib.build: could not be checked: "
+            "AttributeError: module 'fakelib' has no attribute 'build'"
+        ),
+    ]
+
+
+@posix_only
+def test_before_must_fail_because_of_the_old_keyword(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broken = "def make(*, new=None, **kwargs):\n    if kwargs:\n        raise ValueError('no')\n"
+    monkeypatch.setitem(KEYWORD_VERSIONS, "2.0.0", broken)
+    lines = verify(write_keyword_notice(tmp_path), FakeIndex(KEYWORD_VERSIONS))
+    assert [line for line in lines if line.startswith("FAIL")] == [
+        "FAIL 2.0.0 example.before: fails, but not because of old: ValueError: no"
     ]
 
 
@@ -851,6 +1044,7 @@ def test_main_prints_results_and_annotations(
         return [
             ve.Result(ve.Check(Version("1.0"), "before", should_run=True), True, "runs"),
             ve.Result(ve.Check(Version("2.0"), "before", should_run=False), False, "it ran"),
+            ve.Result(ve.SignatureCheck(Version("2.0"), "demo.make", "new"), False, "no new"),
         ]
 
     monkeypatch.setattr(ve, "verify_notice", fake_verify)
@@ -861,9 +1055,11 @@ def test_main_prints_results_and_annotations(
     assert (
         f"\n{rel}\n  ok    1.0  example.before: runs\n  FAIL  2.0  example.before: it ran\n" in out
     )
+    assert "\n  FAIL  2.0  signature of demo.make: no new\n" in out
     assert (f"::error file={rel}::2.0  example.before: it ran\n" in out) is in_github
-    assert out.count("::error") == int(in_github)
-    assert out.endswith("\n1 check(s) failed.\n")
+    assert (f"::error file={rel}::2.0  signature of demo.make: no new\n" in out) is in_github
+    assert out.count("::error") == 2 * int(in_github)
+    assert out.endswith("\n2 check(s) failed.\n")
 
 
 @posix_only
