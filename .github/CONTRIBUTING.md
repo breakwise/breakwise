@@ -43,6 +43,7 @@ The [Development section of the README](../README.md#development) lists every ch
 
 - **Validate notices** lints the code, the docs and the workflows, runs the tests with full coverage, validates every notice and builds the package.
 - **Test tools (Python 3.13)** and **Test tools (Python 3.14)** run the tests on newer Python.
+- **Test on Windows** and **Test on macOS** run the tests and validate the notices on those systems, with their own settings. Then they install the package and check that a notice it writes to a file is UTF-8.
 - **Verify examples** installs real releases from PyPI and runs the examples of the notices that the pull request changes, or every notice when the tools change.
 
 For contributors from outside the project, a maintainer approves each run before it starts.
