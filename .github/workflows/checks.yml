@@ -110,6 +110,70 @@ jobs:
       - name: Validate notices
         run: python tools/validate_notices.py
 
+  # The package runs on its users' systems, so it is tested on Windows and macOS too, with
+  # their own settings: no PYTHONIOENCODING or PYTHONUTF8.
+  other-systems:
+    name: Test on ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: Windows
+            runner: windows-2025
+          - system: macOS
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Test the tools and the package
+        # Without --cov: Windows skips the tests of the verifier, so only the Linux jobs
+        # require full coverage.
+        run: python -m pytest
+      - name: Validate notices
+        run: python tools/validate_notices.py
+      - name: Build the package and install it
+        shell: bash
+        run: |
+          python -m build --no-isolation --outdir dist
+          wheels=(dist/*.whl)
+          python -m pip install --no-deps "${wheels[0]}"
+      - name: Write a notice to a file, as a user would
+        # In the default shell: PowerShell on Windows, bash on macOS.
+        run: breakwise explain BW-2026-0001 > explain.txt
+      - name: Check that the file is UTF-8
+        shell: python
+        run: |
+          import pathlib, shutil, subprocess, sys
+          from breakwise.cli import render
+          from breakwise.notices import find
+
+          def read_utf8(name):
+              data = pathlib.Path(name).read_bytes()
+              if data.startswith(b"\xef\xbb\xbf"):
+                  sys.exit(f"{name} starts with a byte order mark.")
+              try:
+                  return data.decode("utf-8").replace("\r\n", "\n")
+              except UnicodeDecodeError as error:
+                  sys.exit(f"{name} is not UTF-8: {error}")
+
+          if read_utf8("explain.txt") != render(find("BW-2026-0001")) + "\n":
+              sys.exit("explain.txt does not hold the whole notice.")
+          # The notices are ASCII, so an arrow, which cp1252 lacks, comes through an error
+          # message, written to a file as with 2> error.txt.
+          with open("error.txt", "wb") as error:
+              subprocess.run([shutil.which("breakwise"), "explain", "BW-\u2192"], stderr=error)
+          expected = "breakwise: 'BW-\u2192' is not a notice ID. IDs look like BW-2026-0001.\n"
+          if read_utf8("error.txt") != expected:
+              sys.exit(f"error.txt holds {read_utf8('error.txt')!r}, not {expected!r}.")
+
   examples:
     name: Verify examples
     needs: validate
