@@ -472,8 +472,59 @@ def test_install_pins_the_version_and_its_dependency_date(fake_uv: Path, tmp_pat
     assert venv_call == f"venv --no-config --quiet --python python3 {target}"
     assert pip_call == (
         f"pip install --no-config --quiet --python {interpreter} "
-        "--exclude-newer 2026-01-02T12:00:00Z demo==1.2.3"
+        "--default-index https://pypi.org/simple --exclude-newer 2026-01-02T12:00:00Z demo==1.2.3"
     )
+
+
+INDEX_VARIABLES = ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL")
+
+
+@pytest.fixture
+def tool_runs(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], dict[str, str]]]:
+    """Record each tool the verifier runs, with its environment, in a machine with uv settings."""
+    for name in INDEX_VARIABLES:
+        monkeypatch.setenv(name, "http://127.0.0.1:9/simple")
+    monkeypatch.setenv("UV_PYTHON", "3.99")
+    monkeypatch.setenv("UV_CACHE_DIR", "/cache/uv")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    runs: list[tuple[list[str], dict[str, str]]] = []
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        runs.append((command, kwargs["env"]))
+        return subprocess.CompletedProcess(command, 0, stdout="3.12.15\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return runs
+
+
+def assert_no_uv_settings_but_the_kept_ones(env: dict[str, str]) -> None:
+    assert not [name for name in INDEX_VARIABLES if name in env]
+    assert "UV_PYTHON" not in env
+    # Where uv keeps its files and how the machine connects stay.
+    assert (env["UV_CACHE_DIR"], env["HTTPS_PROXY"]) == ("/cache/uv", "http://proxy.example:3128")
+
+
+def test_install_comes_from_pypi_whatever_the_uv_variables_say(
+    tool_runs: list[tuple[list[str], dict[str, str]]], tmp_path: Path
+) -> None:
+    ve.install("demo", Version("1.2.3"), "2026-01-02T12:00:00Z", "python3", tmp_path / "env")
+    assert [command[1] for command, _ in tool_runs] == ["venv", "pip"]
+    pip_command = tool_runs[1][0]
+    index = pip_command.index("--default-index")
+    assert pip_command[index + 1] == "https://pypi.org/simple"
+    for _, env in tool_runs:
+        assert_no_uv_settings_but_the_kept_ones(env)
+
+
+@pytest.mark.usefixtures("fresh_examples_python")
+def test_examples_python_runs_without_the_uv_variables_too(
+    tool_runs: list[tuple[list[str], dict[str, str]]],
+) -> None:
+    assert ve.examples_python("3.12") == Version("3.12.15")
+    assert len(tool_runs) == 2
+    for _, env in tool_runs:
+        assert_no_uv_settings_but_the_kept_ones(env)
 
 
 @posix_only

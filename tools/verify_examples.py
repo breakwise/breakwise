@@ -41,9 +41,10 @@ The paths and signatures are read by one probe per release, which runs like an
 example in the environment of that release.
 
 Releases and their upload times come from PyPI's JSON Simple API (PEP 691 and
-PEP 700). Each version is installed with ``uv`` together with its dependencies
-as they were one day after it was uploaded (``--exclude-newer``), so that later
-releases of other packages cannot break old versions.
+PEP 700). Each version is installed from PyPI with ``uv`` together with its
+dependencies as they were one day after it was uploaded (``--exclude-newer``),
+so that later releases of other packages cannot break old versions. Neither
+uv's config files nor its ``UV_*`` variables can change where they come from.
 
 Examples run in a separate Python process that gets none of this process's
 environment variables, so no secrets, only fake API keys for common AI
@@ -110,7 +111,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Process groups, killpg and the virtual environment layout used here are POSIX.
 POSIX = os.name == "posix"
 
-PYPI_SIMPLE = "https://pypi.org/simple/{name}/"
+PYPI_INDEX = "https://pypi.org/simple"
+PYPI_SIMPLE = PYPI_INDEX + "/{name}/"
 SIMPLE_JSON = "application/vnd.pypi.simple.v1+json"
 USER_AGENT = "breakwise-verify-examples (+https://github.com/breakwise/breakwise)"
 PYPI_ATTEMPTS = 3
@@ -555,21 +557,51 @@ def _uv() -> str:
 
 
 def install(package: str, version: Version, cutoff: str, python: str, target: Path) -> Path:
-    """Create a virtual environment with one version of a package. Return its interpreter."""
+    """Create a virtual environment with one version of a package. Return its interpreter.
+
+    The package comes from PyPI, where the list of its releases comes from.
+    """
     uv = _uv()
     # --no-config: uv settings on this machine must not change what gets installed.
     _run_tool([uv, "venv", "--no-config", "--quiet", "--python", python, str(target)])
     interpreter = target / "bin" / "python"
     install_command = [uv, "pip", "install", "--no-config", "--quiet", "--python", str(interpreter)]
-    _run_tool([*install_command, "--exclude-newer", cutoff, f"{package}=={version}"])
+    source = ["--default-index", PYPI_INDEX, "--exclude-newer", cutoff]
+    _run_tool([*install_command, *source, f"{package}=={version}"])
     return interpreter
+
+
+# uv also reads settings from UV_* variables, which --no-config doesn't stop. Some of
+# them change what gets installed or from where, such as UV_DEFAULT_INDEX, UV_INDEX_URL
+# and UV_EXTRA_INDEX_URL, so the tools run without any UV_* variable but these. They only
+# say where uv keeps its files and how it connects, which some machines need.
+UV_VARIABLES_KEPT = frozenset(
+    {"UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_NATIVE_TLS", "UV_HTTP_TIMEOUT"}
+)
+
+
+def tool_environment() -> dict[str, str]:
+    """This process's environment without the uv variables that could change an install.
+
+    Everything else stays, such as proxies and certificates.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("UV_") or name in UV_VARIABLES_KEPT
+    }
 
 
 def _run_tool(command: list[str]) -> str:
     """Run a tool and return what it printed."""
     try:
         completed = subprocess.run(  # noqa: S603 - fixed tool, arguments from the notice schema
-            command, capture_output=True, text=True, timeout=INSTALL_TIMEOUT, check=False
+            command,
+            capture_output=True,
+            text=True,
+            timeout=INSTALL_TIMEOUT,
+            check=False,
+            env=tool_environment(),
         )
     except subprocess.TimeoutExpired as error:
         raise VerifyError(f"Timed out: {' '.join(command)}") from error
