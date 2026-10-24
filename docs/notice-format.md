@@ -54,6 +54,14 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    with the old name in `example.before` and only the new name in `example.after`.
    A `rename` has no `instructions`: use them only when a person has to decide.
    `rename` covers names that code imports or uses: modules, classes, functions, methods and attributes.
+   A path is one that an import and then `getattr` reach from a module,
+   so an attribute that only instances get, such as one set in `__init__`, can't be renamed this way.
+   `example.before` uses `rename.from` by that exact path, directly or through an import of it,
+   and `example.after` uses `rename.to` the same way and doesn't use `rename.from`.
+   A method or an attribute that the example reaches through an object, such as `agent.run_sync(...)` or `result.output`,
+   counts by its last name, as long as the example uses something from the same top-level package.
+   The verifier checks the full path on the real releases.
+   The examples import names explicitly, without `import *`.
    With `rename.keyword_of`, it also covers a keyword argument whose name alone changed: same value, same meaning, same position.
    Then `example.before` passes the old keyword to one of the callables, and `example.after` passes the new keyword and not the old one.
    A call counts by the last part of its name, such as `Agent(...)` or `agent.run(...)`.

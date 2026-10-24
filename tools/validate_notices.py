@@ -295,24 +295,84 @@ def _attribute_use(node: ast.Attribute, source: _Source) -> NameUse:
     return NameUse((node.attr,), (places[-1],))
 
 
-def used_names(code: str) -> set[tuple[str, ...]]:
-    """Return the names that Python code uses, as dotted paths split into parts."""
-    return {use.parts for use in name_uses(code)}
+def resolved_uses(code: str) -> set[str]:
+    """Return the full dotted paths that Python code uses, through its imports.
 
-
-def uses(code: str, name: str) -> bool:
-    """Whether Python code uses ``name``.
-
-    A name without dots matches any part of a used path, so ``OpenAIModel``
-    is used in ``openai.OpenAIModel()``. A dotted name must match the start of
-    one, so ``pydantic_ai.models.openai`` is used in both
-    ``from pydantic_ai.models.openai import OpenAIModel`` and
-    ``from pydantic_ai.models import openai``.
+    After ``from a.b import X as Y``, ``Y()`` uses ``a.b.X``. After
+    ``import a.b as m``, ``m.X`` uses ``a.b.X``. The imports are uses too.
+    A name that no import binds, such as a builtin, stays as it is written,
+    and ``from a import *`` binds nothing. The code must be valid Python.
     """
-    parts = tuple(name.split("."))
-    if len(parts) == 1:
-        return any(name in path for path in used_names(code))
-    return any(path[: len(parts)] == parts for path in used_names(code))
+    return _uses(code)[0]
+
+
+def _uses(code: str) -> tuple[set[str], set[str]]:
+    """The full paths that code uses, and the names of the members it reaches through objects.
+
+    A member is an attribute of something that no import binds, such as a
+    variable or the result of a call: ``run`` in ``agent.run()`` or ``output``
+    in ``f().output``.
+    """
+    tree = ast.parse(code)
+    bindings, paths = _imports(tree)
+    source = _Source(code)
+    members: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            parts: tuple[str, ...] = (node.id,)
+        elif isinstance(node, ast.Attribute):
+            parts = _attribute_use(node, source).parts
+            if not _reached_through_import(node, bindings):
+                members.add(node.attr)
+        else:
+            continue
+        first, *rest = parts
+        paths.add(".".join([bindings.get(first, first), *rest]))
+    return paths, members
+
+
+def _reached_through_import(node: ast.Attribute, bindings: Mapping[str, str]) -> bool:
+    """Whether an attribute chain starts with a name that an import binds, as ``m.X.f`` does."""
+    root = node.value
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id in bindings
+
+
+def _imports(tree: ast.Module) -> tuple[dict[str, str], set[str]]:
+    """The full path that each name an import binds stands for, and the imported paths."""
+    bindings: dict[str, str] = {}
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                paths.add(alias.name)
+                # import a.b binds a; import a.b as m binds m to a.b.
+                top = alias.name.partition(".")[0]
+                bindings[alias.asname or top] = alias.name if alias.asname else top
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                if alias.name != "*":
+                    path = f"{node.module}.{alias.name}"
+                    paths.add(path)
+                    bindings[alias.asname or alias.name] = path
+    return bindings, paths
+
+
+def _uses_path(code: str, path: str) -> bool:
+    """Whether code uses ``path``, or something in it, such as a method of a class.
+
+    A method or an attribute that code reaches through an object, such as
+    ``agent.run()``, counts by its last name, as long as the code uses something
+    from the top-level package of ``path``. The verifier checks the full path.
+    """
+    paths, members = _uses(code)
+    top, name = path.partition(".")[0], path.rpartition(".")[2]
+    return _within(paths, path) or (name in members and _within(paths, top))
+
+
+def _within(paths: Iterable[str], prefix: str) -> bool:
+    return any(used == prefix or used.startswith(f"{prefix}.") for used in paths)
 
 
 # This fix is temporary. Once the engine can fix code (phase 4 in docs/architecture.md),
@@ -577,25 +637,23 @@ def _check_rename(notice: Notice) -> Iterator[Problem]:
 
 
 def _check_name_rename(notice: Notice, old: str, new: str) -> Iterator[Problem]:
-    old_name, new_name = distinguishing_names(old, new)
+    """The examples use the paths of the rename, as written, directly or through an import."""
     before, after = notice.data["example"]["before"], notice.data["example"]["after"]
+    through = "by its full path or through an import of it"
     problems = []
-    if not uses(before, old_name):
-        problems.append(
-            notice.problem("example.before", f"example.before must use the old name {old_name}.")
-        )
-    if not uses(after, new_name):
-        problems.append(
-            notice.problem("example.after", f"example.after must use the new name {new_name}.")
-        )
-    # When only the module changed, the old module may still be needed for other names.
-    renamed = old.rpartition(".")[2] != new.rpartition(".")[2]
-    if renamed and uses(after, old_name):
-        message = f"example.after must not use the old name {old_name}."
+    if not _uses_path(before, old):
+        message = f"example.before must use rename.from, {old}, {through}."
+        problems.append(notice.problem("example.before", message))
+    if not _uses_path(after, new):
+        message = f"example.after must use rename.to, {new}, {through}."
+        problems.append(notice.problem("example.after", message))
+    if _uses_path(after, old):
+        message = f"example.after must not use rename.from, {old}."
         problems.append(notice.problem("example.after", message))
     yield from problems
     # The validator applies a rename within one module. A move to another waits for the engine.
     if not problems and old.rpartition(".")[0] == new.rpartition(".")[0]:
+        old_name, new_name = distinguishing_names(old, new)
         yield from _check_fix(notice, apply_rename(before, old_name, new_name))
 
 
