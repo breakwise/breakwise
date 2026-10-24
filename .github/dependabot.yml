@@ -1,0 +1,23 @@
+---
+# A pull request each week for new releases of the actions and of the npm packages.
+# The Python tools are updated by hand, because uv pins them with hashes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    # A release must be a week old first, so that a bad one can be pulled before it lands here.
+    cooldown:
+      default-days: 7
+    # Every action update comes in one pull request.
+    groups:
+      actions:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
