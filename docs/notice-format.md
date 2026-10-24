@@ -85,6 +85,11 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    It must also have `rename.to` as an explicit parameter on `breaks_in` and on `works_since`, as `inspect.signature` shows it.
    A callable that takes it only through `**kwargs` fails this check and doesn't belong in the list,
    because `example.after` could run on it while the argument is ignored.
+   The verifier also checks the latest release after `breaks_in` that accepts the Python of the examples:
+   the latest stable release, or the latest pre-release when `breaks_in` is a pre-release and no stable release follows it.
+   There `example.before` must still fail and `example.after` must still run, and the paths and signatures are checked as on `breaks_in`.
+   A failure there means that the library may have changed after `breaks_in`, for example by bringing the old name back.
+   The latest release changes over time, so the result of this check depends on when it runs.
    CI runs it on the notices that a pull request changes, on every notice when the tools change,
    and on every notice on each push to `main` and every week.
 5. **Offline examples.** Examples run without network access and with fake API keys,

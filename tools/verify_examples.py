@@ -29,7 +29,13 @@ on real releases of its package:
   also take ``rename.to`` as an explicit parameter on ``breaks_in`` and on
   ``works_since``, as ``inspect.signature`` shows it. Taking it only through
   ``**kwargs`` does not count, because then ``example.after`` can run although
-  the callable ignores the argument.
+  the callable ignores the argument;
+- on the latest release after ``breaks_in`` that accepts the Python of the
+  examples, everything is checked as on ``breaks_in``. That is the latest stable
+  release, or the latest pre-release when ``breaks_in`` is a pre-release and no
+  stable release follows it. A failure there means that the library may have
+  changed after ``breaks_in``, for example by bringing the old name back. The
+  latest release changes over time, so this result depends on when it runs.
 
 The paths and signatures are read by one probe per release, which runs like an
 example in the environment of that release.
@@ -81,6 +87,7 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import (
     InvalidSdistFilename,
     InvalidWheelFilename,
@@ -179,6 +186,11 @@ except BaseException as error:
     raise
 """
 
+LATEST_NOTE = (
+    "This is the latest release, so the library may have changed after breaks_in: "
+    "it may have brought the old name back or broken the new code."
+)
+
 # Resolves paths and reads signatures with one release installed. It runs like an example,
 # so importing the package is offline too. It reads the request from PROBE_REQUEST and
 # writes what it found to PROBE_RESULT, both JSON in its working directory.
@@ -221,9 +233,6 @@ with open({PROBE_RESULT!r}, "w", encoding="utf-8") as result_file:
     json.dump({{"paths": paths, "signatures": signatures}}, result_file)
 """
 
-Fetcher = Callable[[str], dict[Version, dt.datetime]]
-Installer = Callable[[str, Version, str, str, Path], Path]
-
 
 class VerifyError(Exception):
     """A notice cannot be verified, for example because a version is not on PyPI."""
@@ -236,6 +245,8 @@ class Check:
     version: Version
     example: str
     should_run: bool
+    # On the latest release after breaks_in, a failure may mean that the library changed.
+    latest: bool = False
 
     @property
     def label(self) -> str:
@@ -318,10 +329,36 @@ class Run:
 
 
 @dataclass(frozen=True)
+class LatestNote:
+    """Why a newer release than the one checked as the latest is passed over, or none is."""
+
+    version: Version
+
+    @property
+    def label(self) -> str:
+        return "latest release"
+
+
+@dataclass(frozen=True)
 class Result:
-    check: Check | SignatureCheck | PathCheck
+    check: Check | SignatureCheck | PathCheck | LatestNote
     passed: bool
     detail: str
+
+
+@dataclass(frozen=True)
+class Release:
+    """When a release was uploaded, and the Requires-Python of each of its files.
+
+    ``requires_python`` holds None for a file that states none.
+    """
+
+    uploaded: dt.datetime
+    requires_python: frozenset[str | None] = frozenset({None})
+
+
+Fetcher = Callable[[str], dict[Version, Release]]
+Installer = Callable[[str, Version, str, str, Path], Path]
 
 
 def version_of(filename: str) -> Version | None:
@@ -334,27 +371,33 @@ def version_of(filename: str) -> Version | None:
         return None
 
 
-def parse_files(files: Iterable[Mapping[str, Any]]) -> dict[Version, dt.datetime]:
+def parse_files(files: Iterable[Mapping[str, Any]]) -> dict[Version, Release]:
     """Map every release that has files which are not yanked to its latest upload time.
 
     ``files`` are the file entries of a project page in PyPI's JSON Simple API.
     Files that are neither wheels nor source distributions, such as eggs, are skipped.
+    Each release also keeps the Requires-Python of its files.
     """
-    releases: dict[Version, dt.datetime] = {}
+    releases: dict[Version, Release] = {}
     for file in files:
         version = version_of(file["filename"])
         uploaded = file.get("upload-time")
         if version is None or not uploaded or file.get("yanked"):
             continue
         upload_time = dt.datetime.fromisoformat(uploaded)
-        releases[version] = max(upload_time, releases.get(version, upload_time))
+        requires = frozenset({file.get("requires-python") or None})
+        if version in releases:
+            known = releases[version]
+            upload_time = max(upload_time, known.uploaded)
+            requires |= known.requires_python
+        releases[version] = Release(upload_time, requires)
     return releases
 
 
 def fetch_releases(
     name: str, attempts: int = PYPI_ATTEMPTS, sleep: Callable[[float], None] = time.sleep
-) -> dict[Version, dt.datetime]:
-    """Return the releases of a package on PyPI and when they were uploaded.
+) -> dict[Version, Release]:
+    """Return the releases of a package on PyPI, when they were uploaded, and their Python.
 
     This is the data uv uses for ``--exclude-newer``. When PyPI cannot be
     reached or is busy, the request is repeated after a growing pause.
@@ -395,9 +438,15 @@ def _read_project_page(name: str, attempts: int, sleep: Callable[[float], None])
 
 
 def plan_checks(
-    releases: Mapping[Version, dt.datetime], breaks_in: Version, works_since: Version | None
+    releases: Mapping[Version, Release],
+    breaks_in: Version,
+    works_since: Version | None,
+    latest: Version | None = None,
 ) -> list[Check]:
-    """Decide which examples to run on which versions."""
+    """Decide which examples to run on which versions.
+
+    ``latest`` is the latest release after ``breaks_in`` to check, from latest_release().
+    """
     for field, version in (("breaks_in", breaks_in), ("works_since", works_since)):
         if version is not None and version not in releases:
             raise VerifyError(f"{field} {version} is not a release on PyPI, or it was yanked.")
@@ -424,7 +473,54 @@ def plan_checks(
         older = [v for v in releases if v < works_since]
         if older:
             checks.append(Check(max(older), "after", should_run=False))
+    # The library may change after breaks_in, for example by bringing the old name back.
+    if latest is not None:
+        checks += [
+            Check(latest, "before", should_run=False, latest=True),
+            Check(latest, "after", should_run=True, latest=True),
+        ]
     return checks
+
+
+def latest_release(
+    releases: Mapping[Version, Release], breaks_in: Version, python: Version
+) -> tuple[Version | None, Result | None]:
+    """Return the latest release after ``breaks_in`` to check, and a note when one is passed over.
+
+    That is the latest stable release, or the latest of any kind when ``breaks_in``
+    is a pre-release and no stable release follows it. It must accept ``python``,
+    the Python that runs the examples, so a newer release that doesn't is passed over.
+    """
+    newer = sorted((v for v in releases if v > breaks_in), reverse=True)
+    stable = [v for v in newer if not v.is_prerelease]
+    candidates = stable if stable or not breaks_in.is_prerelease else newer
+    chosen = next((v for v in candidates if _accepts(releases[v], python)), None)
+    if not candidates or candidates[0] == chosen:
+        return chosen, None
+    passed_over = candidates[0]
+    requires = f"{passed_over} requires Python {_requirement(releases[passed_over])}"
+    if chosen is None:
+        detail = f"not checked: no release after {breaks_in} accepts Python {python}; {requires}"
+    else:
+        detail = f"{requires}, so the latest release checked is {chosen}"
+    return chosen, Result(LatestNote(passed_over), True, detail)
+
+
+def _accepts(release: Release, python: Version) -> bool:
+    """Whether some file of a release accepts ``python``, as uv decides which file to use."""
+    return any(spec is None or _spec_accepts(spec, python) for spec in release.requires_python)
+
+
+def _spec_accepts(spec: str, python: Version) -> bool:
+    try:
+        return SpecifierSet(spec).contains(python, prereleases=True)
+    except InvalidSpecifier:
+        # A Requires-Python that can't be read doesn't stop the release from being checked.
+        return True
+
+
+def _requirement(release: Release) -> str:
+    return " or ".join(sorted(spec for spec in release.requires_python if spec))
 
 
 def exclude_newer(uploaded: dt.datetime) -> str:
@@ -433,11 +529,34 @@ def exclude_newer(uploaded: dt.datetime) -> str:
     return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def install(package: str, version: Version, cutoff: str, python: str, target: Path) -> Path:
-    """Create a virtual environment with one version of a package. Return its interpreter."""
+@functools.cache
+def examples_python(python: str) -> Version:
+    """Return the version of the Python that runs the examples, asked once for each run.
+
+    ``--python`` may be a path or a request such as ``3.12``, so uv makes an
+    environment with it, as it does for the examples, and its interpreter tells.
+    """
+    with tempfile.TemporaryDirectory(prefix="breakwise-python-") as tmp_name:
+        target = Path(tmp_name) / "venv"
+        _run_tool([_uv(), "venv", "--no-config", "--quiet", "--python", python, str(target)])
+        code = "import platform; print(platform.python_version())"
+        output = _run_tool([str(target / "bin" / "python"), "-I", "-c", code]).strip()
+    try:
+        return Version(output)
+    except InvalidVersion as error:
+        raise VerifyError(f"Python {python} gave {output!r} as its version.") from error
+
+
+def _uv() -> str:
     uv = shutil.which("uv")
     if uv is None:
         raise VerifyError("uv is not installed. Install requirements-dev.txt first.")
+    return uv
+
+
+def install(package: str, version: Version, cutoff: str, python: str, target: Path) -> Path:
+    """Create a virtual environment with one version of a package. Return its interpreter."""
+    uv = _uv()
     # --no-config: uv settings on this machine must not change what gets installed.
     _run_tool([uv, "venv", "--no-config", "--quiet", "--python", python, str(target)])
     interpreter = target / "bin" / "python"
@@ -446,7 +565,8 @@ def install(package: str, version: Version, cutoff: str, python: str, target: Pa
     return interpreter
 
 
-def _run_tool(command: list[str]) -> None:
+def _run_tool(command: list[str]) -> str:
+    """Run a tool and return what it printed."""
     try:
         completed = subprocess.run(  # noqa: S603 - fixed tool, arguments from the notice schema
             command, capture_output=True, text=True, timeout=INSTALL_TIMEOUT, check=False
@@ -455,6 +575,7 @@ def _run_tool(command: list[str]) -> None:
         raise VerifyError(f"Timed out: {' '.join(command)}") from error
     if completed.returncode != 0:
         raise VerifyError(f"Failed: {' '.join(command)}\n{completed.stderr.strip()}")
+    return completed.stdout
 
 
 def run_example(
@@ -653,31 +774,38 @@ def verify_notice(
     python: str,
     fetch: Fetcher = fetch_releases,
     installer: Installer = install,
+    python_version: Version | None = None,
 ) -> list[Result]:
-    """Install the versions a notice needs and run its examples on them."""
+    """Install the versions a notice needs and run its examples on them.
+
+    ``python_version`` is the version of ``python``. Without it, examples_python() finds it.
+    """
     notice = _read_valid_notice(path)
     name = notice["package"]["name"]
     breaks_in = Version(notice["breaks_in"])
     works_since = Version(notice["works_since"]) if "works_since" in notice else None
+    rename = notice["rename"] if notice["type"] == "rename" else None
+    keyword_of = rename.get("keyword_of", []) if rename else []
     # For a rename, each example must fail because of the name it uses, not another reason.
     expected_errors: dict[str, str | None] = {"before": None, "after": None}
-    signature_checks: list[SignatureCheck] = []
-    if notice["type"] == "rename" and "keyword_of" in notice["rename"]:
-        rename = notice["rename"]
+    if rename and keyword_of:
         expected_errors = {"before": rename["from"], "after": rename["to"]}
-        versions = [breaks_in] if works_since is None else [breaks_in, works_since]
-        signature_checks = [
-            SignatureCheck(version, target, rename["to"])
-            for version in dict.fromkeys(versions)
-            for target in rename["keyword_of"]
-        ]
-    elif notice["type"] == "rename":
-        old, new = distinguishing_names(notice["rename"]["from"], notice["rename"]["to"])
+    elif rename:
+        old, new = distinguishing_names(rename["from"], rename["to"])
         expected_errors = {"before": old, "after": new}
 
     releases = fetch(name)
-    checks = plan_checks(releases, breaks_in, works_since)
-    path_checks = plan_path_checks(notice["rename"], checks) if notice["type"] == "rename" else []
+    python_version = python_version or examples_python(python)
+    latest, note = latest_release(releases, breaks_in, python_version)
+    checks = plan_checks(releases, breaks_in, works_since, latest)
+    path_checks = plan_path_checks(rename, checks) if rename else []
+    signature_versions = [v for v in (breaks_in, works_since, latest) if v is not None]
+    signature_checks = [
+        SignatureCheck(version, target, rename["to"])
+        for version in dict.fromkeys(signature_versions)
+        for target in keyword_of
+        if rename
+    ]
     results = []
     with tempfile.TemporaryDirectory(prefix="breakwise-") as tmp_name:
         tmp = Path(tmp_name).resolve()
@@ -685,7 +813,7 @@ def verify_notice(
 
         def interpreter(version: Version) -> Path:
             if version not in interpreters:
-                cutoff = exclude_newer(releases[version])
+                cutoff = exclude_newer(releases[version].uploaded)
                 target = tmp / f"venv-{version}"
                 interpreters[version] = installer(name, version, cutoff, python, target)
             return interpreters[version]
@@ -712,7 +840,17 @@ def verify_notice(
             probes[version] = _shorten_probe(probe, tmp)
         results += [evaluate_path(check, probes[check.version]) for check in path_checks]
         results += [evaluate_signature(check, probes[check.version]) for check in signature_checks]
-    return results
+    on_latest = {check.version for check in checks if check.latest}
+    results = [
+        _on_latest(result) if not result.passed and result.check.version in on_latest else result
+        for result in results
+    ]
+    return [*results, note] if note else results
+
+
+def _on_latest(result: Result) -> Result:
+    """Say what a failure on the latest release after breaks_in may mean."""
+    return dataclasses.replace(result, detail=f"{result.detail.rstrip('.')}. {LATEST_NOTE}")
 
 
 def _shorten_paths(run: Run, tmp: Path) -> Run:
@@ -800,6 +938,8 @@ def report(paths: Sequence[Path], python: str, root: Path, in_github: bool) -> i
             continue
         for result in results:
             status = "ok  " if result.passed else "FAIL"
+            if isinstance(result.check, LatestNote):
+                status = "note"
             what = f"{result.check.version}  {result.check.label}"
             print(f"  {status}  {what}: {result.detail}")
             if not result.passed:

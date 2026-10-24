@@ -9,13 +9,14 @@ import http.client
 import io
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,17 +29,18 @@ UTC = dt.UTC
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REAL_NOTICE = REPO_ROOT / "notices/pypi/pydantic-ai/BW-2026-0001.yaml"
 PYTHON = Path(sys.executable)
+PYTHON_VERSION = Version(platform.python_version())
 UPLOADED = dt.datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 posix_only = pytest.mark.skipif(not ve.POSIX, reason="the verifier runs on Linux and macOS")
 
 
-def releases(*versions: str) -> dict[Version, dt.datetime]:
-    return {Version(v): UPLOADED for v in versions}
+def releases(*versions: str) -> dict[Version, ve.Release]:
+    return {Version(v): ve.Release(UPLOADED) for v in versions}
 
 
 def plan(
-    available: dict[Version, dt.datetime], breaks_in: str, works_since: str | None = None
+    available: dict[Version, ve.Release], breaks_in: str, works_since: str | None = None
 ) -> list[tuple[str, str, bool]]:
     since = Version(works_since) if works_since else None
     checks = ve.plan_checks(available, Version(breaks_in), since)
@@ -78,8 +80,39 @@ def test_parse_files_keeps_the_latest_upload_of_each_release() -> None:
         {"filename": "demo-1.5.0-py2.7.egg", "upload-time": "2026-05-01T10:00:00Z"},
     ]
     assert ve.parse_files(files) == {
-        Version("1.0.0"): dt.datetime(2026, 1, 1, 10, 5, tzinfo=UTC),
-        Version("1.3.0"): dt.datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+        Version("1.0.0"): ve.Release(dt.datetime(2026, 1, 1, 10, 5, tzinfo=UTC)),
+        Version("1.3.0"): ve.Release(dt.datetime(2026, 4, 1, 10, 0, tzinfo=UTC)),
+    }
+
+
+def test_parse_files_keeps_the_requires_python_of_every_file() -> None:
+    files: list[dict[str, Any]] = [
+        {
+            "filename": "demo-2.0.0-py3-none-any.whl",
+            "upload-time": "2026-01-01T10:00:00Z",
+            "requires-python": ">=3.13",
+        },
+        {"filename": "demo-2.0.0.tar.gz", "upload-time": "2026-01-01T10:05:00Z"},
+        {
+            "filename": "demo-2.1.0.tar.gz",
+            "upload-time": "2026-02-01T10:00:00Z",
+            "requires-python": ">=3.13",
+        },
+        {
+            "filename": "demo-2.2.0.tar.gz",
+            "upload-time": "2026-03-01T10:00:00Z",
+            "requires-python": "",
+        },
+    ]
+    assert ve.parse_files(files) == {
+        # A file that states no Requires-Python is kept as None.
+        Version("2.0.0"): ve.Release(
+            dt.datetime(2026, 1, 1, 10, 5, tzinfo=UTC), frozenset({">=3.13", None})
+        ),
+        Version("2.1.0"): ve.Release(
+            dt.datetime(2026, 2, 1, 10, 0, tzinfo=UTC), frozenset({">=3.13"})
+        ),
+        Version("2.2.0"): ve.Release(dt.datetime(2026, 3, 1, 10, 0, tzinfo=UTC)),
     }
 
 
@@ -265,6 +298,139 @@ def test_dependencies_are_cut_off_one_day_after_the_release() -> None:
     assert ve.exclude_newer(uploaded) == "2025-08-21T15:31:24Z"
     in_riyadh = dt.datetime(2025, 8, 20, 18, 31, 24, tzinfo=dt.timezone(dt.timedelta(hours=3)))
     assert ve.exclude_newer(in_riyadh) == "2025-08-21T15:31:24Z"
+
+
+# --- The latest release -------------------------------------------------------
+
+PY312 = Version("3.12.15")
+
+
+def requiring(spec: str, *versions: str) -> dict[Version, ve.Release]:
+    return {Version(v): ve.Release(UPLOADED, frozenset({spec})) for v in versions}
+
+
+@pytest.mark.parametrize(
+    ("available", "breaks_in", "latest"),
+    [
+        pytest.param(releases("1.0", "2.0", "2.1", "2.2"), "2.0", "2.2", id="latest stable"),
+        pytest.param(
+            releases("1.0", "2.0", "2.1", "2.2b1"), "2.0", "2.1", id="stable over newer pre-release"
+        ),
+        pytest.param(
+            releases("1.0", "2.0b1", "2.0b2", "2.0rc1"), "2.0b1", "2.0rc1", id="only pre-releases"
+        ),
+        pytest.param(
+            releases("1.0", "2.0b1", "2.0b2", "2.0"), "2.0b1", "2.0", id="stable after pre-release"
+        ),
+        pytest.param(
+            releases("1.0", "2.0", "2.1b1"), "2.0", None, id="only pre-releases after stable"
+        ),
+        pytest.param(releases("1.0", "2.0"), "2.0", None, id="nothing after breaks_in"),
+    ],
+)
+def test_latest_release(
+    available: dict[Version, ve.Release], breaks_in: str, latest: str | None
+) -> None:
+    expected = Version(latest) if latest else None
+    assert ve.latest_release(available, Version(breaks_in), PY312) == (expected, None)
+
+
+def test_a_latest_release_that_does_not_accept_the_python_is_passed_over() -> None:
+    available = {**releases("1.0", "2.0", "2.1"), **requiring(">=3.13", "2.2", "2.3")}
+    assert ve.latest_release(available, Version("2.0"), PY312) == (
+        Version("2.1"),
+        ve.Result(
+            ve.LatestNote(Version("2.3")),
+            True,
+            "2.3 requires Python >=3.13, so the latest release checked is 2.1",
+        ),
+    )
+
+
+def test_without_a_release_that_accepts_the_python_the_latest_is_only_noted() -> None:
+    available = {**releases("1.0", "2.0"), **requiring(">=3.13", "2.1")}
+    assert ve.latest_release(available, Version("2.0"), PY312) == (
+        None,
+        ve.Result(
+            ve.LatestNote(Version("2.1")),
+            True,
+            "not checked: no release after 2.0 accepts Python 3.12.15; 2.1 requires Python >=3.13",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("requires_python", "accepted"),
+    [
+        pytest.param(frozenset({None}), True, id="no Requires-Python"),
+        pytest.param(frozenset({">=3.11"}), True, id="accepted"),
+        pytest.param(frozenset({">=3.13"}), False, id="not accepted"),
+        pytest.param(frozenset({">=3.13", None}), True, id="another file states none"),
+        pytest.param(frozenset({">=3.13", "<3.13"}), True, id="another file accepts it"),
+        pytest.param(
+            frozenset({"not a specifier"}), True, id="a Requires-Python that can't be read"
+        ),
+    ],
+)
+def test_a_release_accepts_a_python_when_one_of_its_files_does(
+    requires_python: frozenset[str | None], accepted: bool
+) -> None:
+    available = {**releases("1.0", "2.0"), Version("2.1"): ve.Release(UPLOADED, requires_python)}
+    chosen, _ = ve.latest_release(available, Version("2.0"), PY312)
+    assert (chosen == Version("2.1")) is accepted
+
+
+def test_the_latest_release_is_planned_last() -> None:
+    available = releases("1.0", "1.5", "2.0", "2.5")
+    checks = ve.plan_checks(available, Version("2.0"), Version("1.5"), Version("2.5"))
+    assert [(str(c.version), c.example, c.should_run) for c in checks if c.latest] == [
+        ("2.5", "before", False),
+        ("2.5", "after", True),
+    ]
+    assert checks[-2:] == [c for c in checks if c.latest]
+
+
+@pytest.fixture
+def fresh_examples_python() -> Iterator[None]:
+    """examples_python() keeps its answer for the run, so each test starts without one."""
+    ve.examples_python.cache_clear()
+    yield
+    ve.examples_python.cache_clear()
+
+
+@pytest.mark.usefixtures("fresh_examples_python")
+def test_examples_python_asks_an_environment_once_for_each_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def run_tool(command: list[str]) -> str:
+        commands.append(command)
+        return "3.12.15\n" if command[1] == "-I" else ""
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(ve, "_run_tool", run_tool)
+    assert ve.examples_python("3.12") == ve.examples_python("3.12") == Version("3.12.15")
+    assert len(commands) == 2
+    assert commands[0][:6] == ["/usr/bin/uv", "venv", "--no-config", "--quiet", "--python", "3.12"]
+    assert Path(commands[1][0]).parts[-2:] == ("bin", "python")
+    assert commands[1][1:] == ["-I", "-c", "import platform; print(platform.python_version())"]
+
+
+@pytest.mark.usefixtures("fresh_examples_python")
+def test_examples_python_reports_an_answer_that_is_not_a_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(ve, "_run_tool", lambda command: "not a version\n")
+    with pytest.raises(ve.VerifyError, match="gave 'not a version' as its version"):
+        ve.examples_python("3.12")
+
+
+@posix_only
+@pytest.mark.usefixtures("fresh_examples_python")
+def test_examples_python_finds_the_version_of_a_real_python() -> None:
+    assert ve.examples_python(sys.executable) == PYTHON_VERSION
 
 
 # --- Installing ---------------------------------------------------------------
@@ -759,7 +925,7 @@ def test_evaluate_path(should_exist: bool, probe: ve.Probe, passed: bool, detail
 
 
 def path_plan(
-    rename: dict[str, Any], available: dict[Version, dt.datetime], breaks_in: str, works_since: str
+    rename: dict[str, Any], available: dict[Version, ve.Release], breaks_in: str, works_since: str
 ) -> list[tuple[str, str, str, bool, str]]:
     checks = ve.plan_checks(available, Version(breaks_in), Version(works_since))
     return [
@@ -836,13 +1002,20 @@ references:
 class FakeIndex:
     """Installs a tiny package called fakelib whose contents depend on the version."""
 
-    def __init__(self, versions: dict[str, str] = FAKE_VERSIONS) -> None:
+    def __init__(
+        self, versions: dict[str, str] = FAKE_VERSIONS, requires: dict[str, str] | None = None
+    ) -> None:
         self.versions = versions
+        # The Requires-Python of some versions, as PyPI states it for their files.
+        self.requires = requires or {}
         self.installed: list[tuple[str, str, str]] = []
 
-    def releases(self, name: str) -> dict[Version, dt.datetime]:
+    def releases(self, name: str) -> dict[Version, ve.Release]:
         assert name == "fakelib"
-        return releases(*self.versions)
+        return {
+            Version(v): ve.Release(UPLOADED, frozenset({self.requires.get(v)}))
+            for v in self.versions
+        }
 
     def install(
         self, package: str, version: Version, cutoff: str, python: str, target: Path
@@ -863,12 +1036,19 @@ def write_notice(tmp_path: Path, breaks_in: str = "2.0.0", works_since: str = "1
 
 def verify(notice: Path, index: FakeIndex) -> list[str]:
     results = ve.verify_notice(
-        notice, sys.executable, fetch=index.releases, installer=index.install
+        notice,
+        sys.executable,
+        fetch=index.releases,
+        installer=index.install,
+        python_version=PYTHON_VERSION,
     )
-    return [
-        f"{'ok' if r.passed else 'FAIL'} {r.check.version} {r.check.label}: {r.detail}"
-        for r in results
-    ]
+    return [f"{status(r)} {r.check.version} {r.check.label}: {r.detail}" for r in results]
+
+
+def status(result: ve.Result) -> str:
+    if isinstance(result.check, ve.LatestNote):
+        return "note"
+    return "ok" if result.passed else "FAIL"
 
 
 @posix_only
@@ -1035,6 +1215,122 @@ def test_an_old_name_that_is_only_a_stub_on_breaks_in_fails(
     assert [line for line in lines if line.startswith("FAIL")] == [
         "FAIL 2.0.0 rename.from: fakelib.Old still exists on 2.0.0, where example.before must fail"
     ]
+
+
+LATEST = (
+    "This is the latest release, so the library may have changed after breaks_in: "
+    "it may have brought the old name back or broken the new code."
+)
+
+
+@posix_only
+def test_the_latest_release_after_breaks_in_is_checked_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "3.0.0", "class New: pass\n")
+    index = FakeIndex()
+    lines = verify(write_notice(tmp_path), index)
+    assert all(line.startswith("ok") for line in lines)
+    latest = [line.split(": ")[0] for line in lines if " 3.0.0 " in line]
+    assert latest == [
+        "ok 3.0.0 example.before",
+        "ok 3.0.0 example.after",
+        "ok 3.0.0 rename.from",
+        "ok 3.0.0 rename.to",
+    ]
+    assert lines[-2:] == [
+        "ok 3.0.0 rename.from: fakelib.Old is gone",
+        "ok 3.0.0 rename.to: fakelib.New exists",
+    ]
+    assert index.installed[-1] == ("fakelib", "3.0.0", "2026-01-02T12:00:00Z")
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("code", "failures"),
+    [
+        pytest.param(
+            "class Old: pass\nclass New: pass\n",
+            [
+                f"FAIL 3.0.0 example.before: should fail on this version, but it ran. {LATEST}",
+                (
+                    "FAIL 3.0.0 rename.from: fakelib.Old still exists on 3.0.0, where "
+                    f"example.before must fail. {LATEST}"
+                ),
+            ],
+            id="the old name came back",
+        ),
+        pytest.param(
+            "class Newer: pass\n",
+            [
+                "FAIL 3.0.0 example.after: should run, but failed: ImportError: cannot import name",
+                (
+                    "FAIL 3.0.0 rename.to: fakelib.New does not exist on 3.0.0, where "
+                    "example.after runs (AttributeError: module 'fakelib' has no attribute "
+                    f"'New'). {LATEST}"
+                ),
+            ],
+            id="the new code broke",
+        ),
+    ],
+)
+def test_a_change_on_the_latest_release_fails_and_says_what_it_may_mean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str, failures: list[str]
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "3.0.0", code)
+    lines = verify(write_notice(tmp_path), FakeIndex())
+    found = [line for line in lines if line.startswith("FAIL")]
+    assert len(found) == len(failures)
+    for line, start in zip(found, failures, strict=True):
+        assert line.startswith(start)
+        assert line.endswith(LATEST)
+
+
+@posix_only
+def test_a_newer_release_for_another_python_is_passed_over_with_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "3.0.0", "class New: pass\n")
+    monkeypatch.setitem(FAKE_VERSIONS, "3.1.0", "class New: pass\n")
+    index = FakeIndex(requires={"3.1.0": ">=99"})
+    # Without python_version, the verifier asks examples_python() before it plans.
+    asked: list[str] = []
+
+    def examples_python(python: str) -> Version:
+        asked.append(python)
+        return PYTHON_VERSION
+
+    monkeypatch.setattr(ve, "examples_python", examples_python)
+    results = ve.verify_notice(
+        write_notice(tmp_path), sys.executable, fetch=index.releases, installer=index.install
+    )
+    assert asked == [sys.executable]
+    assert all(result.passed for result in results)
+    assert {
+        str(result.check.version) for result in results if result.check.version > Version("2.0.0")
+    } == {"3.0.0", "3.1.0"}
+    note = results[-1]
+    assert (status(note), str(note.check.version), note.check.label, note.detail) == (
+        "note",
+        "3.1.0",
+        "latest release",
+        "3.1.0 requires Python >=99, so the latest release checked is 3.0.0",
+    )
+    assert "3.1.0" not in [version for _, version, _ in index.installed]
+
+
+@posix_only
+def test_no_latest_release_for_the_python_is_noted_and_does_not_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "3.0.0", "class Old: pass\nclass New: pass\n")
+    lines = verify(write_notice(tmp_path), FakeIndex(requires={"3.0.0": ">=99"}))
+    assert not [line for line in lines if line.startswith("FAIL")]
+    assert lines[-1] == (
+        f"note 3.0.0 latest release: not checked: no release after 2.0.0 accepts Python "
+        f"{PYTHON_VERSION}; 3.0.0 requires Python >=99"
+    )
+    assert not [line for line in lines[:-1] if " 3.0.0 " in line]
 
 
 @posix_only
@@ -1250,6 +1546,33 @@ def test_before_must_fail_because_of_the_old_keyword(
     assert [line for line in lines if line.startswith("FAIL")] == [
         "FAIL 2.0.0 example.before: fails, but not because of old: ValueError: no"
     ]
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("code", "signature"),
+    [
+        pytest.param(
+            "def make(*, new=None): pass\n",
+            "ok 3.0.0 signature of fakelib.make: takes new as an explicit parameter",
+            id="new is still explicit",
+        ),
+        pytest.param(
+            "def make(**kwargs): pass\n",
+            "FAIL 3.0.0 signature of fakelib.make: has no explicit parameter new, and taking it "
+            "through **kwargs does not count. Check the versions, or remove fakelib.make from "
+            f"rename.keyword_of. {LATEST}",
+            id="new went into **kwargs",
+        ),
+    ],
+)
+def test_a_renamed_keyword_is_checked_on_the_latest_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str, signature: str
+) -> None:
+    monkeypatch.setitem(KEYWORD_VERSIONS, "3.0.0", code)
+    lines = verify(write_keyword_notice(tmp_path), FakeIndex(KEYWORD_VERSIONS))
+    assert "ok 3.0.0 rename.keyword_of: fakelib.make exists" in lines
+    assert lines[-1] == signature
 
 
 @posix_only
@@ -1528,6 +1851,7 @@ def test_main_prints_results_and_annotations(
             ve.Result(ve.Check(Version("1.0"), "before", should_run=True), True, "runs"),
             ve.Result(ve.Check(Version("2.0"), "before", should_run=False), False, "it ran"),
             ve.Result(ve.SignatureCheck(Version("2.0"), "demo.make", "new"), False, "no new"),
+            ve.Result(ve.LatestNote(Version("3.0")), True, "3.0 requires Python >=3.13"),
         ]
 
     monkeypatch.setattr(ve, "verify_notice", fake_verify)
@@ -1540,6 +1864,8 @@ def test_main_prints_results_and_annotations(
         f"\n{rel}\n  ok    1.0  example.before: runs\n  FAIL  2.0  example.before: it ran\n" in out
     )
     assert "\n  FAIL  2.0  signature of demo.make: no new\n" in out
+    # A note is neither a pass nor a failure, so it gets no annotation.
+    assert "\n  note  3.0  latest release: 3.0 requires Python >=3.13\n" in out
     assert (f"::error file={rel}::2.0  example.before: it ran\n" in out) is in_github
     assert (f"::error file={rel}::2.0  signature of demo.make: no new\n" in out) is in_github
     assert out.count("::error") == 2 * int(in_github)
