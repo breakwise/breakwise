@@ -47,7 +47,7 @@ schema_version: "0.2"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
-modified: "2026-10-23"
+modified: "2026-10-24"
 package:
   ecosystem: PyPI
   name: pydantic-ai
@@ -70,7 +70,7 @@ example:
 
     model = OpenAIChatModel("gpt-5")
 references:
-  - https://pydantic.dev/docs/ai/changelog/
+  - https://pydantic.dev/docs/ai/project/changelog/
   - https://github.com/pydantic/pydantic-ai/blob/v0.7.6/pydantic_ai_slim/pydantic_ai/models/openai.py
 ```
 

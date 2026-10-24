@@ -3,6 +3,7 @@ schema_version: "0.2"
 id: BW-2026-0002
 status: verified
 published: "2026-10-23"
+modified: "2026-10-24"
 package:
   ecosystem: PyPI
   name: pydantic-ai
@@ -27,5 +28,5 @@ example:
 
     agent = Agent("test", toolsets=[])
 references:
-  - https://pydantic.dev/docs/ai/changelog/
+  - https://pydantic.dev/docs/ai/project/changelog/
   - https://github.com/pydantic/pydantic-ai/blob/v0.4.4/pydantic_ai_slim/pydantic_ai/agent.py
