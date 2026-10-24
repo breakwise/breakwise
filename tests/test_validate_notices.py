@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
+import textwrap
 from pathlib import Path
 
 import jsonschema
@@ -489,6 +490,13 @@ def test_syntax_errors_in_quoted_examples_point_to_their_first_line(repo: Path) 
     ]
 
 
+OLD_PATH = "pydantic_ai.models.openai.OpenAIModel"
+NEW_PATH = "pydantic_ai.models.openai.OpenAIChatModel"
+THROUGH = "by its full path or through an import of it"
+MUST_USE_FROM = f"example.before must use rename.from, {OLD_PATH}, {THROUGH}."
+MUST_USE_TO = f"example.after must use rename.to, {NEW_PATH}, {THROUGH}."
+
+
 @pytest.mark.parametrize(
     ("before", "after", "starts", "message"),
     [
@@ -496,28 +504,50 @@ def test_syntax_errors_in_quoted_examples_point_to_their_first_line(repo: Path) 
             "    import pydantic_ai\n\n    model = None\n",
             AFTER_BLOCK,
             "  before:",
-            "example.before must use the old name OpenAIModel.",
+            MUST_USE_FROM,
             id="before without the old name",
         ),
         pytest.param(
             "    # OpenAIModel\n    model = 'OpenAIModel'\n",
             AFTER_BLOCK,
             "  before:",
-            "example.before must use the old name OpenAIModel.",
+            MUST_USE_FROM,
             id="old name only in a comment and a string",
+        ),
+        pytest.param(
+            "    from pydantic_ai.models.other import OpenAIModel\n\n"
+            '    model = OpenAIModel("gpt-5")\n',
+            AFTER_BLOCK,
+            "  before:",
+            MUST_USE_FROM,
+            id="before with the old name from another module",
+        ),
+        pytest.param(
+            '    from pydantic_ai.models import OpenAIModel\n\n    model = OpenAIModel("gpt-5")\n',
+            AFTER_BLOCK,
+            "  before:",
+            MUST_USE_FROM,
+            id="before with a re-export of the old name",
+        ),
+        pytest.param(
+            '    from pydantic_ai.models.openai import *\n\n    model = OpenAIModel("gpt-5")\n',
+            AFTER_BLOCK,
+            "  before:",
+            MUST_USE_FROM,
+            id="before with a star import",
         ),
         pytest.param(
             BEFORE_BLOCK,
             "    import pydantic_ai\n\n    model = None\n",
             "  after:",
-            "example.after must use the new name OpenAIChatModel.",
+            MUST_USE_TO,
             id="after without the new name",
         ),
         pytest.param(
             BEFORE_BLOCK,
-            AFTER_BLOCK + "    legacy = OpenAIModel\n",
+            AFTER_BLOCK + "    from pydantic_ai.models.openai import OpenAIModel\n",
             "  after:",
-            "example.after must not use the old name OpenAIModel.",
+            f"example.after must not use rename.from, {OLD_PATH}.",
             id="after with the old name",
         ),
     ],
@@ -546,6 +576,192 @@ def test_rename_examples_may_use_names_through_modules(repo: Path) -> None:
     assert problems_in(repo) == []
 
 
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param(
+            "    from pydantic_ai.models.openai import OpenAIModel as Model\n\n"
+            '    model = Model("x")\n',
+            "    from pydantic_ai.models.openai import OpenAIChatModel as Model\n\n"
+            '    model = Model("x")\n',
+            id="an alias of the name",
+        ),
+        pytest.param(
+            "    import pydantic_ai.models.openai as models\n\n"
+            '    model = models.OpenAIModel("x")\n',
+            "    import pydantic_ai.models.openai as models\n\n"
+            '    model = models.OpenAIChatModel("x")\n',
+            id="an alias of the module",
+        ),
+        pytest.param(
+            "    import pydantic_ai.models.openai\n\n"
+            '    m = pydantic_ai.models.openai.OpenAIModel("x")\n',
+            "    import pydantic_ai.models.openai\n\n"
+            '    m = pydantic_ai.models.openai.OpenAIChatModel("x")\n',
+            id="the full path",
+        ),
+        pytest.param(
+            "    from pydantic_ai.models.openai import OpenAIModel\n\n"
+            "    model = OpenAIModel.for_tests()\n",
+            "    from pydantic_ai.models.openai import OpenAIChatModel\n\n"
+            "    model = OpenAIChatModel.for_tests()\n",
+            id="something in the renamed class",
+        ),
+    ],
+)
+def test_rename_examples_may_use_the_paths_through_aliases(
+    repo: Path, before: str, after: str
+) -> None:
+    edit(repo, BEFORE_BLOCK, before)
+    edit(repo, AFTER_BLOCK, after)
+    assert problems_in(repo) == []
+
+
+def set_rename(repo: Path, old: str, new: str) -> None:
+    edit(repo, f"  from: {OLD_PATH}\n", f"  from: {old}\n")
+    edit(repo, f"  to: {NEW_PATH}\n", f"  to: {new}\n")
+
+
+AGENT = "    from pydantic_ai import Agent\n\n"
+RESULT_PATHS = ("pydantic_ai.agent.AgentRunResult.data", "pydantic_ai.agent.AgentRunResult.output")
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "before", "after"),
+    [
+        pytest.param(
+            "pydantic_ai.Agent.run_old",
+            "pydantic_ai.Agent.run_new",
+            AGENT + '    agent = Agent("test")\n    agent.run_old("hi")\n',
+            AGENT + '    agent = Agent("test")\n    agent.run_new("hi")\n',
+            id="a method of an instance",
+        ),
+        pytest.param(
+            *RESULT_PATHS,
+            AGENT + '    print(Agent("test").run_sync("hi").data)\n',
+            AGENT + '    print(Agent("test").run_sync("hi").output)\n',
+            id="a property of the result of calls",
+        ),
+    ],
+)
+def test_members_of_objects_count_by_their_last_name(
+    repo: Path, old: str, new: str, before: str, after: str
+) -> None:
+    set_rename(repo, old, new)
+    edit(repo, BEFORE_BLOCK, before)
+    edit(repo, AFTER_BLOCK, after)
+    assert problems_in(repo) == []
+    # The fix of example.before is example.after, so the fix check passes for the right reason.
+    old_name, new_name = vn.distinguishing_names(old, new)
+    fixed = vn.apply_rename(textwrap.dedent(before), old_name, new_name)
+    assert fixed == textwrap.dedent(after)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "before", "after", "problems"),
+    [
+        pytest.param(
+            *RESULT_PATHS,
+            AGENT + '    result = Agent("test").run_sync("hi")\n    print(result.data)\n',
+            AGENT
+            + '    result = Agent("test").run_sync("hi")\n'
+            + "    print(result.output, result.data)\n",
+            [("  after:", f"example.after must not use rename.from, {RESULT_PATHS[0]}.")],
+            id="after with the old member",
+        ),
+        pytest.param(
+            *RESULT_PATHS,
+            "    result = make()\n    print(result.data)\n",
+            AGENT + '    print(Agent("test").run_sync("hi").output)\n',
+            [
+                (
+                    "  before:",
+                    f"example.before must use rename.from, {RESULT_PATHS[0]}, {THROUGH}.",
+                )
+            ],
+            id="a member without anything from the package",
+        ),
+        pytest.param(
+            "pydantic_ai.models.WRONG.OpenAIModel",
+            "pydantic_ai.models.WRONG.OpenAIChatModel",
+            '    from pydantic_ai.models import openai\n\n    model = openai.OpenAIModel("x")\n',
+            "    from pydantic_ai.models import openai\n\n"
+            '    model = openai.OpenAIChatModel("x")\n',
+            [
+                (
+                    "  before:",
+                    (
+                        "example.before must use rename.from, "
+                        f"pydantic_ai.models.WRONG.OpenAIModel, {THROUGH}."
+                    ),
+                ),
+                (
+                    "  after:",
+                    (
+                        "example.after must use rename.to, "
+                        f"pydantic_ai.models.WRONG.OpenAIChatModel, {THROUGH}."
+                    ),
+                ),
+            ],
+            id="a wrong module, reached through an import of its parent",
+        ),
+        pytest.param(
+            "pydantic_ai.models.WRONG.OpenAIModel",
+            "pydantic_ai.models.WRONG.OpenAIChatModel",
+            "    import pydantic_ai.models.openai\n\n"
+            '    model = pydantic_ai.models.openai.OpenAIModel("x")\n',
+            "    import pydantic_ai.models.openai\n\n"
+            '    model = pydantic_ai.models.openai.OpenAIChatModel("x")\n',
+            [
+                (
+                    "  before:",
+                    (
+                        "example.before must use rename.from, "
+                        f"pydantic_ai.models.WRONG.OpenAIModel, {THROUGH}."
+                    ),
+                ),
+                (
+                    "  after:",
+                    (
+                        "example.after must use rename.to, "
+                        f"pydantic_ai.models.WRONG.OpenAIChatModel, {THROUGH}."
+                    ),
+                ),
+            ],
+            # import a.b binds a, so the full path is resolved instead of counted as a member.
+            id="a wrong module, reached through a plain import of the full module",
+        ),
+    ],
+)
+def test_members_of_objects_need_the_package_and_the_right_names(
+    repo: Path, old: str, new: str, before: str, after: str, problems: list[tuple[str, str]]
+) -> None:
+    set_rename(repo, old, new)
+    edit(repo, BEFORE_BLOCK, before)
+    edit(repo, AFTER_BLOCK, after)
+    assert problems_in(repo) == [at(repo, starts, message) for starts, message in problems]
+
+
+def test_rename_paths_that_the_examples_do_not_use_are_rejected(repo: Path) -> None:
+    # The short names still appear in the examples, but in another module.
+    edit(repo, f"  from: {OLD_PATH}", "  from: this.module.does_not_exist.OpenAIModel")
+    edit(repo, f"  to: {NEW_PATH}", "  to: this.module.does_not_exist.OpenAIChatModel")
+    assert problems_in(repo) == [
+        at(
+            repo,
+            "  before:",
+            "example.before must use rename.from, this.module.does_not_exist.OpenAIModel, "
+            f"{THROUGH}.",
+        ),
+        at(
+            repo,
+            "  after:",
+            "example.after must use rename.to, this.module.does_not_exist.OpenAIChatModel, "
+            f"{THROUGH}.",
+        ),
+    ]
+
+
 def test_same_names_are_rejected(repo: Path) -> None:
     edit(
         repo,
@@ -562,8 +778,10 @@ def test_moved_objects_are_checked_by_module(repo: Path) -> None:
         "  to: pydantic_ai.models.chat.OpenAIModel",
     )
     edit(repo, AFTER_BLOCK, BEFORE_BLOCK)
+    moved = "pydantic_ai.models.chat.OpenAIModel"
     assert problems_in(repo) == [
-        at(repo, "  after:", "example.after must use the new name pydantic_ai.models.chat.")
+        at(repo, "  after:", f"example.after must not use rename.from, {OLD_PATH}."),
+        at(repo, "  after:", f"example.after must use rename.to, {moved}, {THROUGH}."),
     ]
 
     edit(
@@ -576,28 +794,27 @@ def test_moved_objects_are_checked_by_module(repo: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("code", "name", "used"),
+    ("code", "paths"),
     [
-        ("import a.b", "a.b", True),
-        ("import a.b as c\nc.d()", "a.b", True),
-        ("from a import b", "a.b", True),
-        ("from a.b import c", "a.b", True),
-        ("from a.b import c", "a", True),
-        ("import a", "a.b", False),
-        ("a.b.c()", "a.b", True),
-        ("x = (a\n     .b())", "a.b", True),
-        ("x = f().b.c", "c", True),
-        ("x = f().b.c", "b.c", False),
-        ("from . import X", "X", True),
-        ("x = f'{X}'", "X", True),
-        ("# X\nx = 'X'", "X", False),
-        ("f(X=1)", "X", False),
-        ("def X():\n    pass", "X", False),
-        ("XY = 1", "X", False),
+        ("import a.b", {"a.b"}),
+        ("import a.b\na.b.c()", {"a.b", "a", "a.b.c"}),
+        ("import a.b as m\nm.c()", {"a.b", "a.b.c"}),
+        ("from a import b", {"a.b"}),
+        ("from a.b import c as d\nd.e()", {"a.b.c", "a.b.c.e"}),
+        ("from a import b\nb.c.d", {"a.b", "a.b.c", "a.b.c.d"}),
+        ("x = (a\n     .b())", {"x", "a", "a.b"}),
+        ("x = f().b.c", {"x", "f", "b", "c"}),
+        # Nothing binds these names, so they stay as written.
+        ("from . import X\nX()", {"X"}),
+        ("from a import *\nX()", {"X"}),
+        ("x = f'{X}'", {"x", "X"}),
+        ("# a.b\nx = 'a.b'", {"x"}),
+        ("f(X=1)", {"f"}),
+        ("def X():\n    pass", set()),
     ],
 )
-def test_uses_follows_python_names(code: str, name: str, used: bool) -> None:
-    assert vn.uses(code, name) is used
+def test_resolved_uses_follow_the_imports(code: str, paths: set[str]) -> None:
+    assert vn.resolved_uses(code) == paths
 
 
 def test_distinguishing_names() -> None:
@@ -832,7 +1049,7 @@ def test_passed_keywords(code: str, callables: set[str], keywords: set[str]) -> 
 )
 def test_apply_rename_changes_exactly_what_uses_sees(code: str, fixed: str) -> None:
     assert vn.apply_rename(code, "Old", "New") == fixed
-    assert not vn.uses(fixed, "Old")
+    assert not any("Old" in use.parts for use in vn.name_uses(fixed))
 
 
 @pytest.mark.parametrize(
