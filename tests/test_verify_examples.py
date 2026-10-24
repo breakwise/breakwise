@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import email.message
 import http.client
@@ -441,10 +442,15 @@ def _alive(pid: int) -> bool:
     """Whether a process runs. A zombie, which has ended but was not collected yet, does not."""
     try:
         os.kill(pid, 0)
+        # Linux only; the state follows the name in parentheses.
+        stat = Path(f"/proc/{pid}/stat").read_text()
     except ProcessLookupError:
+        # The process ended, also when that happens between kill() and the read.
         return False
-    stat = Path(f"/proc/{pid}/stat")  # Linux only; the state follows the name in parentheses.
-    return not (stat.exists() and stat.read_text().rpartition(")")[2].split()[0] == "Z")
+    except FileNotFoundError:
+        # Without /proc, as on macOS, kill() is all there is. On Linux the process just ended.
+        return not Path("/proc").is_dir()
+    return stat.rpartition(")")[2].split()[0] != "Z"
 
 
 def _wait_until_gone(pid: int, seconds: float = 5.0) -> bool:
@@ -452,6 +458,46 @@ def _wait_until_gone(pid: int, seconds: float = 5.0) -> bool:
     while _alive(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
     return not _alive(pid)
+
+
+@pytest.mark.parametrize(
+    ("kill_error", "stat", "has_proc", "alive"),
+    [
+        pytest.param(None, "42 (sleep (60)) S 1 42", True, True, id="runs"),
+        pytest.param(None, "42 (python3) Z 1 42", True, False, id="zombie"),
+        pytest.param(ProcessLookupError(), "", True, False, id="ended before kill"),
+        pytest.param(None, ProcessLookupError(), True, False, id="ended before the read"),
+        pytest.param(None, FileNotFoundError(), True, False, id="ended before the open"),
+        pytest.param(None, FileNotFoundError(), False, True, id="no /proc, as on macOS"),
+    ],
+)
+def test_alive_counts_a_process_that_vanishes_at_any_moment_as_ended(
+    monkeypatch: pytest.MonkeyPatch,
+    kill_error: OSError | None,
+    stat: str | OSError,
+    has_proc: bool,
+    alive: bool,
+) -> None:
+    # A real process can't be made to end at an exact moment, so the system calls are faked.
+    def kill(pid: int, _signal: int) -> None:
+        assert pid == 42
+        if kill_error is not None:
+            raise kill_error
+
+    def read_text(path: Path, *_args: object, **_kwargs: object) -> str:
+        assert path == Path("/proc/42/stat")
+        if isinstance(stat, OSError):
+            raise stat
+        return stat
+
+    def is_dir(path: Path) -> bool:
+        assert path == Path("/proc")
+        return has_proc
+
+    monkeypatch.setattr(os, "kill", kill)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    assert _alive(42) is alive
 
 
 @posix_only
@@ -489,9 +535,10 @@ def test_a_process_that_leaves_the_group_cannot_hold_the_run_open(tmp_path: Path
         assert run.returncode is None
         assert time.monotonic() - started < 1 + ve.STOPPED_OUTPUT_TIMEOUT + 5
     finally:
-        pid_file = tmp_path / "escapee.pid"
-        if pid_file.exists():
-            os.kill(int(pid_file.read_text()), 9)
+        # The escapee may not have written its PID, may have created the file but not
+        # written it yet, or may have ended already.
+        with contextlib.suppress(FileNotFoundError, ProcessLookupError, ValueError):
+            os.kill(int((tmp_path / "escapee.pid").read_text()), 9)
 
 
 @pytest.mark.parametrize(
