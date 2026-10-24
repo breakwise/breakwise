@@ -65,6 +65,8 @@ exclude_also = ['if __name__ == "__main__":']
 [tool.mypy]
 strict = true
 python_version = "3.12"
+# The verifier runs only on Linux and macOS, so mypy checks the code as Linux everywhere.
+platform = "linux"
 mypy_path = "tools,src"
 files = ["tools", "src", "tests"]
 warn_unreachable = true
