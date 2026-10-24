@@ -9,12 +9,16 @@ name: checks
     # Every Monday, so that changes on PyPI, such as yanked releases, are noticed.
     - cron: "17 5 * * 1"
   workflow_dispatch:
+  # release.yml runs these checks on the tagged commit before it builds.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: checks-${{ github.ref }}
+  # In a run that another workflow calls, github.workflow is the caller's name, so the run
+  # never shares a group with, or cancels, the checks of the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

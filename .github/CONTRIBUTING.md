@@ -53,6 +53,21 @@ For contributors from outside the project, a maintainer approves each run before
 - The code passes ruff and mypy in strict mode.
 - Commit messages are in the imperative, such as "Add the notice for ...".
 
+## Releases
+
+Maintainers release `breakwise` to PyPI from a tag:
+
+1. Raise `__version__` in `src/breakwise/__init__.py` in a pull request.
+2. Once it is merged, tag that commit of `main` with an annotated tag, and push the tag:
+
+   ```sh
+   git tag -a v0.3.0 -m "Breakwise 0.3.0" <commit>
+   git push origin v0.3.0
+   ```
+
+3. The release workflow checks that the tag is on `main` and matches the version. Then it runs every check of a pull request on the tagged commit, with the examples of every notice on real releases, the latest one included. It builds the package, runs it, and waits for a maintainer to approve it in the `pypi` environment. Then it publishes with Trusted Publishing, with attestations.
+4. If a step fails, nothing is published. Re-run the failed jobs when the cause was temporary, such as PyPI being unreachable. Otherwise, such as when a new release of a package fails a notice, fix the cause on `main` and release the next patch version. A tag is never moved or reused.
+
 ## Licenses
 
 A contribution is licensed like the part of the repository it changes.
