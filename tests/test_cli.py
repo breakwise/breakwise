@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import errno
+import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -185,6 +190,13 @@ KEYWORD_RENAME_OUTPUT = [
 ]
 
 
+# "→" is in neither cp1252, the code page Windows gives files and pipes, nor ASCII.
+NON_ASCII = REMOVAL.replace("id: BW-2026-0002", "id: BW-2026-0004").replace(
+    "summary: demo.legacy() was removed in 2.0.0.",
+    "summary: demo.legacy() was removed in 2.0.0 → call demo.modern().",
+)
+
+
 @pytest.fixture
 def bundled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Notices laid out as in the package, in place of the ones that come with it."""
@@ -193,6 +205,7 @@ def bundled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ("pypi/pydantic-ai/BW-2026-0001.yaml", RENAME),
         ("pypi/demo/BW-2026-0002.yaml", REMOVAL),
         ("pypi/pydantic-ai/BW-2026-0003.yaml", KEYWORD_RENAME),
+        ("pypi/demo/BW-2026-0004.yaml", NON_ASCII),
     ):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text, encoding="utf-8")
@@ -272,6 +285,202 @@ def test_explain_says_why_it_shows_nothing(
     capsys: pytest.CaptureFixture[str], notice_id: str, message: str
 ) -> None:
     assert explain(capsys, notice_id) == (1, "", f"breakwise: {message}\n")
+
+
+@pytest.mark.usefixtures("bundled")
+def test_an_id_too_long_for_a_file_name_is_not_there(capsys: pytest.CaptureFixture[str]) -> None:
+    notice_id = "BW-2026-" + "1" * 300
+    code, out, err = explain(capsys, notice_id)
+    assert (code, out) == (1, "")
+    assert err.startswith(f"breakwise: There is no notice {notice_id} in the notices")
+
+
+@pytest.mark.usefixtures("bundled")
+def test_a_file_system_error_means_the_notice_is_not_there(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Whether a name too long raises OSError depends on the Python and the platform.
+    def too_long(_path: Path) -> bool:
+        raise OSError(errno.ENAMETOOLONG, "File name too long")
+
+    monkeypatch.setattr(Path, "is_file", too_long)
+    code, _, err = explain(capsys, "BW-2026-0001")
+    assert (code, err.startswith("breakwise: There is no notice BW-2026-0001 ")) == (1, True)
+
+
+@pytest.mark.parametrize(
+    ("breaks_in", "works_since", "line"),
+    [
+        ("2.0.0b1", "0.7.6", "0.7.6, so the fix can come before the upgrade"),
+        # Versions compare as PEP 440 says, not as text: 0.9.0 comes before 0.10.0.
+        ("0.10.0", "0.9.0", "0.9.0, so the fix can come before the upgrade"),
+        (
+            "2.0.0b1",
+            "2.0.0b1",
+            "2.0.0b1, the release that breaks the old code, so the fix comes with the upgrade",
+        ),
+        # 2.0 and 2.0.0 are the same release.
+        (
+            "2.0.0",
+            "2.0",
+            "2.0, the release that breaks the old code, so the fix comes with the upgrade",
+        ),
+        ("2.0.0b1", None, "not known, so the fix waits for the upgrade"),
+    ],
+)
+def test_works_since_says_when_the_fix_can_come(
+    bundled: Path,
+    capsys: pytest.CaptureFixture[str],
+    breaks_in: str,
+    works_since: str | None,
+    line: str,
+) -> None:
+    text = RENAME.replace('breaks_in: "2.0.0b1"', f'breaks_in: "{breaks_in}"')
+    since = "" if works_since is None else f'works_since: "{works_since}"\n'
+    text = text.replace('works_since: "0.7.6"\n', since)
+    (bundled / "pypi/pydantic-ai/BW-2026-0001.yaml").write_text(text, encoding="utf-8")
+    _, out, _ = explain(capsys, "BW-2026-0001")
+    assert f"\nWorks since: {line}\n" in out
+
+
+class Terminal(io.TextIOWrapper):
+    """Standard output on a terminal."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+class ClosedPipe(io.TextIOWrapper):
+    """Standard output whose reader has gone, so that every write fails with ``error``."""
+
+    def __init__(self, fd: int, error: OSError) -> None:
+        super().__init__(io.BytesIO(), encoding="utf-8")
+        self.fd = fd
+        self.error = error
+
+    def fileno(self) -> int:
+        return self.fd
+
+    def write(self, _text: str) -> int:
+        raise self.error
+
+
+@pytest.mark.usefixtures("bundled")
+def test_files_and_pipes_get_utf8_whatever_the_platform_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Windows gives a file or a pipe its ANSI code page, such as cp1252.
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))
+    assert cli.main(["explain", "BW-2026-0004"]) == 0
+    assert "removed in 2.0.0 → call demo.modern()." in raw.getvalue().decode("utf-8")
+
+
+def test_error_messages_get_utf8_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(raw, encoding="cp1252"))
+    assert cli.main(["explain", "BW-2026-→"]) == 1
+    sys.stderr.flush()
+    assert raw.getvalue().decode("utf-8").splitlines() == [
+        "breakwise: 'BW-2026-→' is not a notice ID. IDs look like BW-2026-0001."
+    ]
+
+
+@pytest.mark.usefixtures("bundled")
+def test_a_terminal_shows_a_question_mark_for_a_character_it_lacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", Terminal(raw, encoding="ascii"))
+    assert cli.main(["explain", "BW-2026-0004"]) == 0
+    assert "removed in 2.0.0 ? call demo.modern()." in raw.getvalue().decode("ascii")
+
+
+@pytest.mark.usefixtures("bundled")
+def test_streams_that_cannot_be_reconfigured_are_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    assert cli.main(["explain", "BW-2026-0004"]) == 0
+    assert "removed in 2.0.0 → call demo.modern()." in out.getvalue()
+
+
+@pytest.mark.usefixtures("bundled")
+@pytest.mark.parametrize(
+    ("platform", "error"),
+    [
+        ("linux", BrokenPipeError(errno.EPIPE, "Broken pipe")),
+        ("win32", BrokenPipeError(errno.EPIPE, "Broken pipe")),
+        # Windows reports a closed pipe as EINVAL when the output is flushed.
+        ("win32", OSError(errno.EINVAL, "Invalid argument")),
+    ],
+)
+def test_a_closed_output_ends_quietly_with_141(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    platform: str,
+    error: OSError,
+) -> None:
+    fd = os.open(tmp_path / "stdout", os.O_WRONLY | os.O_CREAT)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "stdout", ClosedPipe(fd, error))
+    try:
+        assert cli.main(["explain", "BW-2026-0001"]) == cli.CLOSED_OUTPUT == 141
+        # The rest goes to devnull, so the flush when Python exits can't fail again.
+        os.write(fd, b"flushed at exit")
+    finally:
+        os.close(fd)
+    assert (tmp_path / "stdout").read_bytes() == b""
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.usefixtures("bundled")
+@pytest.mark.parametrize(
+    ("platform", "error"),
+    [
+        # EINVAL means a closed pipe only on Windows.
+        ("linux", OSError(errno.EINVAL, "Invalid argument")),
+        ("win32", OSError(errno.EIO, "Input/output error")),
+    ],
+)
+def test_other_output_errors_are_not_hidden(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str, error: OSError
+) -> None:
+    fd = os.open(tmp_path / "stdout", os.O_WRONLY | os.O_CREAT)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "stdout", ClosedPipe(fd, error))
+    try:
+        with pytest.raises(OSError, match=error.strerror):
+            cli.main(["explain", "BW-2026-0001"])
+    finally:
+        os.close(fd)
+
+
+def test_a_reader_that_leaves_early_gets_141_and_no_traceback(bundled: Path) -> None:
+    # A real process whose pipe is closed before anything is read, as with `| head -c 0`.
+    # Python ignores SIGPIPE, so this raises BrokenPipeError on Linux and macOS, and
+    # OSError with EINVAL on Windows. -I ignores PYTHONIOENCODING and the rest of the
+    # environment.
+    code = (
+        "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+        "from breakwise import cli, notices; notices.DATA = Path(sys.argv[2]); "
+        "sys.exit(cli.main(['explain', 'BW-2026-0004']))"
+    )
+    read, write = os.pipe()
+    os.close(read)
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(REPO_ROOT / "src"), str(bundled)],
+            stdout=write,
+            stderr=subprocess.PIPE,
+            timeout=60,
+            check=False,
+        )
+    finally:
+        os.close(write)
+    assert (completed.returncode, completed.stderr) == (141, b"")
 
 
 def test_notice_ids_follow_the_schema() -> None:

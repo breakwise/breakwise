@@ -50,10 +50,19 @@ def find(notice_id: str, root: Traversable | None = None) -> Notice:
             continue
         for package in ecosystem.iterdir():
             file = package / f"{notice_id}.yaml"
-            if file.is_file():
+            if _is_file(file):
                 data = yaml.safe_load(file.read_text(encoding="utf-8"))
                 return Notice(data, f"{ecosystem.name}/{package.name}/{file.name}")
     raise NoticeError(
         f"There is no notice {notice_id} in the notices that come with breakwise {__version__}. "
         "A newer release may have it."
     )
+
+
+def _is_file(file: Traversable) -> bool:
+    # An ID with hundreds of digits makes a file name too long for the file system,
+    # and some Pythons raise OSError for that. Such a notice can't exist.
+    try:
+        return file.is_file()
+    except OSError:
+        return False

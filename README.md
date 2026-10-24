@@ -85,6 +85,7 @@ breakwise explain BW-2026-0001
 ```
 
 The package comes with a copy of the notices, so `breakwise explain` works offline.
+It exits with 0 when it shows the notice, 1 for an ID that is wrong or not there, 2 for wrong usage, and 141 when the output is closed before it ends.
 Finding the code that an upgrade breaks comes next; see the [roadmap](#roadmap).
 
 ## Repository layout
