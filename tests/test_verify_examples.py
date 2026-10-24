@@ -983,9 +983,22 @@ def test_all_notices_skips_markdown_and_hidden_files(tmp_path: Path) -> None:
     assert ve.all_notices(tmp_path) == [tmp_path / "notices/pypi/a/BW-2026-0001.yaml"]
 
 
+# Written out here, not read from the code, so that a file added to the list or removed
+# from it needs a deliberate change to this test too.
+TOOLING = {
+    "tools/verify_examples.py",
+    "tools/validate_notices.py",
+    "requirements-dev.txt",
+    ".github/workflows/checks.yml",
+}
+
+
 def test_all_notices_are_verified_when_the_tooling_changes() -> None:
+    assert ve.RUN_ALL_WHEN_CHANGED == TOOLING
     every = ve.all_notices(REPO_ROOT)
-    for tool in sorted(ve.RUN_ALL_WHEN_CHANGED):
+    assert every
+    for tool in sorted(TOOLING):
+        assert (REPO_ROOT / tool).is_file(), f"{tool} is not in the repository"
         assert ve.notices_to_verify(REPO_ROOT, [tool, "README.md"]) == every
 
 
@@ -1050,6 +1063,71 @@ def test_main_with_all_verifies_every_notice(
     assert verified == ve.all_notices(REPO_ROOT)
     assert verified
     assert capsys.readouterr().out.endswith(f"({len(verified)} notice(s)).\n")
+
+
+class ChangedSince:
+    """``changed_files`` and ``verify_notice`` for a pull request that changed ``changed``."""
+
+    def __init__(self, changed: list[str], passed: bool = True) -> None:
+        self.changed = changed
+        self.passed = passed
+        self.refs: list[str] = []
+        self.verified: list[Path] = []
+
+    def changed_files(self, root: Path, ref: str) -> list[str]:
+        assert root == REPO_ROOT
+        self.refs.append(ref)
+        return self.changed
+
+    def verify_notice(self, path: Path, python: str) -> list[ve.Result]:
+        self.verified.append(path)
+        check = ve.Check(Version("2.0"), "before", should_run=False)
+        return [ve.Result(check, self.passed, "fails as expected" if self.passed else "it ran")]
+
+
+@posix_only
+def test_main_verifies_the_notices_a_pull_request_changes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notice = "notices/pypi/pydantic-ai/BW-2026-0001.yaml"
+    pull_request = ChangedSince([notice, "README.md"])
+    monkeypatch.setattr(ve, "changed_files", pull_request.changed_files)
+    monkeypatch.setattr(ve, "verify_notice", pull_request.verify_notice)
+    assert ve.main(["--changed-since", "origin/main"]) == 0
+    assert pull_request.refs == ["origin/main"]
+    assert pull_request.verified == [REPO_ROOT / notice]
+    assert capsys.readouterr().out.endswith(
+        "\nAll examples behave as their notices say (1 notice(s)).\n"
+    )
+
+
+@posix_only
+def test_main_verifies_every_notice_when_a_pull_request_changes_a_tool(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pull_request = ChangedSince(["tools/validate_notices.py"])
+    monkeypatch.setattr(ve, "changed_files", pull_request.changed_files)
+    monkeypatch.setattr(ve, "verify_notice", pull_request.verify_notice)
+    assert ve.main(["--changed-since", "origin/main"]) == 0
+    every = ve.all_notices(REPO_ROOT)
+    assert pull_request.verified == every
+    assert len(every) >= 2
+    assert capsys.readouterr().out.endswith(f"({len(every)} notice(s)).\n")
+
+
+@posix_only
+def test_main_fails_when_a_notice_a_pull_request_changes_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notice = "notices/pypi/pydantic-ai/BW-2026-0001.yaml"
+    pull_request = ChangedSince([notice], passed=False)
+    monkeypatch.setattr(ve, "changed_files", pull_request.changed_files)
+    monkeypatch.setattr(ve, "verify_notice", pull_request.verify_notice)
+    assert ve.main(["--changed-since", "origin/main"]) == 1
+    assert pull_request.verified == [REPO_ROOT / notice]
+    out = capsys.readouterr().out
+    assert "  FAIL  2.0  example.before: it ran\n" in out
+    assert out.endswith("\n1 check(s) failed.\n")
 
 
 @posix_only

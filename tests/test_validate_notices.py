@@ -853,6 +853,47 @@ def test_apply_keyword_rename_changes_exactly_what_passed_keywords_sees(
     assert "mcp_servers" not in vn.passed_keywords(fixed, callables)
 
 
+# The fix replaces from the end of a line, so that each replacement leaves the places
+# before it where they are. That only shows when the new name has another length.
+
+
+def test_two_renamed_keywords_on_one_line_are_both_fixed() -> None:
+    code = "a, b = Agent('test', mcp_servers=[]), Agent('test', mcp_servers=[])\n"
+    fixed = "a, b = Agent('test', toolsets=[]), Agent('test', toolsets=[])\n"
+    # Calls match by the last part of their name, so the callable is "Agent".
+    assert vn.apply_keyword_rename(code, {"Agent"}, "mcp_servers", "toolsets") == fixed
+
+
+def test_two_renamed_names_on_one_line_are_both_fixed() -> None:
+    code = "a, b = OpenAIModel('gpt-5'), OpenAIModel('gpt-4.1')\n"
+    fixed = "a, b = OpenAIChatModel('gpt-5'), OpenAIChatModel('gpt-4.1')\n"
+    assert vn.apply_rename(code, "OpenAIModel", "OpenAIChatModel") == fixed
+
+
+def test_a_notice_with_two_renamed_names_on_one_line_is_valid(repo: Path) -> None:
+    edit(repo, '    model = OpenAIModel("gpt-5")', '    a, b = OpenAIModel("x"), OpenAIModel("y")')
+    edit(
+        repo,
+        '    model = OpenAIChatModel("gpt-5")',
+        '    a, b = OpenAIChatModel("x"), OpenAIChatModel("y")',
+    )
+    assert problems_in(repo) == []
+
+
+def test_a_notice_with_two_renamed_keywords_on_one_line_is_valid(keyword_repo: Path) -> None:
+    edit(
+        keyword_repo,
+        '    agent = Agent("test", mcp_servers=[])',
+        '    a, b = Agent("test", mcp_servers=[]), Agent("test", mcp_servers=[])',
+    )
+    edit(
+        keyword_repo,
+        '    agent = Agent("test", toolsets=[])',
+        '    a, b = Agent("test", toolsets=[]), Agent("test", toolsets=[])',
+    )
+    assert problems_in(keyword_repo) == []
+
+
 FIX = "example.after must be example.before with the rename applied, and nothing else"
 
 
