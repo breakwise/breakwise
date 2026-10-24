@@ -75,7 +75,7 @@ flowchart LR
 - The **validator** reads every notice as plain YAML and checks it against the schema and the rules: location, ID, dates and versions, that the examples compile and use the right names, and that the README example matches its notice.
 - The **verifier** installs real releases with uv, with dependencies as they were a day after each release, and runs the examples on Python 3.12 in a separate process, with no secrets and with network calls blocked and recorded. The block stops accidents but is not a security boundary, so CI also runs the job with read-only permissions, and pull requests from outside contributors need a maintainer's approval. It also checks that `breaks_in` and `works_since` are the first such releases.
 - The tools themselves run on Python 3.12, 3.13 and 3.14. Examples run on 3.12 only, because old releases of a package may not install on a newer Python.
-- Every pull request has four required checks: the validator with the tests and linters of the tools, the tests on Python 3.13 and on 3.14, and the verifier. On a pull request, the verifier runs the notices it changes, or every notice when the tools change. It runs every notice on each push to `main` and every week, so that a yanked release or a library that changed course is noticed.
+- Every pull request has four required checks: the validator with the tests and linters of the tools, the tests on Python 3.13 and on 3.14, and the verifier. On a pull request, the verifier runs the notices it changes, or every notice when the tools change. It runs every notice on each push to `main` and every week, so that a yanked release is noticed.
 
 ### Index (Next)
 
@@ -239,5 +239,5 @@ PyPI can't reserve a name, and this document makes the name public, so phase 1 s
 
 - How far type inference should go, and which type checker it should rely on.
 - Whether a notice should be able to say that its new code works on every release the verifier can install, instead of leaving out `works_since`.
-- How the registry should handle a library that adds a removed name back. The weekly verification catches it, but the notice then needs a decision.
+- How the registry should handle a library that adds a removed name back. The verifier doesn't check releases after `breaks_in` yet, so nothing notices this today.
 - When the index needs a mirror.

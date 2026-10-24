@@ -20,13 +20,22 @@ A maintainer checks every notice against its sources and then sets `verified`.
 
 ## Check your work locally
 
-You need Python 3.12 or later. The verifier also needs Linux or macOS and network access, and it should run on Python 3.12, because old releases of a package may not install on a newer Python.
+You need Python 3.12 or later. The verifier also needs Linux or macOS and network access.
 
 ```sh
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install --require-hashes -r requirements-dev.txt
 python tools/validate_notices.py
-python tools/verify_examples.py notices/pypi/<package>/<id>.yaml
+python tools/verify_examples.py --python 3.12 notices/pypi/<package>/<id>.yaml
 ```
+
+On Windows, activate the environment with `.venv\Scripts\activate` instead.
+In PowerShell, activating needs scripts to be allowed. If they aren't, use `.venv\Scripts\python` in place of `python` in the commands above.
+`--python 3.12` runs the examples on Python 3.12, because old releases of a package may not install on a newer Python.
+uv finds Python 3.12, or installs it if it is missing.
+
+The verifier runs the examples of a notice on your machine. Run it only on notices whose examples you have read: an example can read your environment variables, such as tokens, and reach the network.
 
 The [Development section of the README](../README.md#development) lists every check that the pull request runs.
 
@@ -34,7 +43,7 @@ The [Development section of the README](../README.md#development) lists every ch
 
 - **Validate notices** lints the code, the docs and the workflows, runs the tests with full coverage, validates every notice and builds the package.
 - **Test tools (Python 3.13)** and **Test tools (Python 3.14)** run the tests on newer Python.
-- **Verify examples** installs real releases from PyPI and runs the examples of the notices that the pull request changes.
+- **Verify examples** installs real releases from PyPI and runs the examples of the notices that the pull request changes, or every notice when the tools change.
 
 For contributors from outside the project, a maintainer approves each run before it starts.
 

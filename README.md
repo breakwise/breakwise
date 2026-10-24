@@ -8,7 +8,7 @@
 **An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
 
 > **Status: early.** This repository holds the notice format (v0.2), the first notices and the `breakwise` package.
-> Its first release on PyPI shows notices offline; finding and fixing affected code comes next. Contributions are welcome.
+> The package on PyPI shows any notice offline; finding and fixing affected code comes next. Contributions are welcome.
 
 ## The problem
 
@@ -136,7 +136,7 @@ python tools/validate_notices.py
 python tools/verify_examples.py --all
 ```
 
-The tests must cover every line and branch of `tools/`.
+The tests must cover every line and branch of `src/` and `tools/`.
 `tools/verify_examples.py` installs real package versions from PyPI, so it needs network access.
 Run it with Python 3.12, or pass `--python` a Python 3.12 interpreter, because old package versions may not install on newer Python versions.
 The pull request checks also lint YAML, Markdown and the workflows;

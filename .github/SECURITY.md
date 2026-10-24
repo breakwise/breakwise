@@ -16,7 +16,7 @@ We confirm that we received your report within 7 days, and we keep you informed 
 - The tools in `tools/` and the workflows in `.github/workflows/`, including the release to PyPI.
 - The notices, for example a notice whose fix would make code unsafe.
 
-CI runs the examples in notices by design. They run with read-only permissions and no secrets, network calls are blocked to prevent accidents, and pull requests from outside contributors need a maintainer's approval before they run. A way around these limits is in scope.
+CI runs the examples in notices by design. The job has read-only permissions and no secrets, and pull requests from outside contributors need a maintainer's approval before they run. The verifier also blocks network calls and stops examples that run too long, but only to prevent accidents: an example can get around both, so doing that is not a vulnerability by itself. A way for a notice or a pull request to get a write token or a secret, to run without that approval, or to change anything outside its own job, such as a cache or a release, is in scope.
 
 ## Supported versions
 

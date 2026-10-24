@@ -61,7 +61,7 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    The validator checks this when the rename stays in one module or renames a keyword argument.
    A move to another module will be checked once the engine can fix code.
    A changed string, such as the model prefix `grok:` becoming `xai:`, is a `signature` change with `instructions`.
-4. **Tested examples.** On every pull request, `tools/verify_examples.py` installs real versions from PyPI
+4. **Tested examples.** `tools/verify_examples.py` installs real versions from PyPI
    and checks that `example.before` runs on the last stable release before `breaks_in` and fails on `breaks_in`,
    and that `example.after` runs on `breaks_in` and on `works_since`.
    When `works_since` is not later than that last stable release, `example.after` must run on it too.
@@ -73,6 +73,8 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    as an explicit parameter on `breaks_in` and on `works_since`, as `inspect.signature` shows it.
    A callable that takes it only through `**kwargs` fails this check and doesn't belong in the list,
    because `example.after` could run on it while the argument is ignored.
+   CI runs it on the notices that a pull request changes, on every notice when the tools change,
+   and on every notice on each push to `main` and every week.
 5. **Offline examples.** Examples run without network access and with fake API keys,
    so they must not call real services: an example that fails after trying to reach the network fails the check.
    For a `behavior` change, use `assert` so that the example fails when the behavior differs.
