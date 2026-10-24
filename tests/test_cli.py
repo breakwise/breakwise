@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -515,3 +516,46 @@ def test_the_package_reads_its_notices_where_the_build_puts_them() -> None:
     notice = notices.find("BW-2026-0001", REPO_ROOT / "notices")
     assert notice.data["id"] == "BW-2026-0001"
     assert notice.url == f"{NOTICES_URL}/pypi/pydantic-ai/BW-2026-0001.yaml"
+
+
+def test_the_wheel_holds_every_notice_where_the_package_reads_it(tmp_path: Path) -> None:
+    # The real build, so that a change to pyproject.toml or to DATA can't go unnoticed.
+    build = [sys.executable, "-m", "build", "--wheel", "--no-isolation", "--outdir", "dist"]
+    built = subprocess.run(
+        [*build, str(REPO_ROOT)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    (wheel,) = (tmp_path / "dist").glob("*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        names = set(archive.namelist())
+        packaged = {
+            name.removeprefix("breakwise/data/notices/"): archive.read(name)
+            for name in names
+            if name.startswith("breakwise/data/notices/")
+        }
+        archive.extractall(tmp_path / "unpacked")
+    source = REPO_ROOT / "notices"
+    files = {
+        path.relative_to(source).as_posix(): path for path in source.rglob("*") if path.is_file()
+    }
+    # Every file of the registry, with the same bytes, and nothing else.
+    assert sorted(packaged) == sorted(files)
+    for rel, path in files.items():
+        assert packaged[rel] == path.read_bytes(), f"{rel} differs in the wheel"
+    licenses = f"breakwise-{__version__}.dist-info/licenses"
+    assert {f"{licenses}/LICENSE", f"{licenses}/notices/LICENSE.md"} <= names
+
+    # The package unpacked from the wheel finds every notice through DATA.
+    ids = sorted(rel.rsplit("/", 1)[-1].removesuffix(".yaml") for rel in files if "/BW-" in rel)
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); from breakwise import notices; "
+        "print(*(notices.find(notice_id).path for notice_id in sys.argv[2:]), sep='\\n')"
+    )
+    found = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(tmp_path / "unpacked"), *ids],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert found.returncode == 0, found.stderr
+    assert sorted(found.stdout.splitlines()) == sorted(rel for rel in files if "/BW-" in rel)
