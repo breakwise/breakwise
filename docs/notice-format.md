@@ -77,8 +77,12 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    and `example.after` must fail on the release just before `works_since`, so that both are the first such releases.
    For a `rename`, the error that stops `example.before` must name the old name,
    and the error that stops `example.after` must name the new name.
-   For a renamed keyword argument, every callable in `rename.keyword_of` must have `rename.to`
-   as an explicit parameter on `breaks_in` and on `works_since`, as `inspect.signature` shows it.
+   The paths of a `rename` must also resolve with `pkgutil.resolve_name`, with each release installed:
+   `rename.from` on every release where `example.before` runs, but not on `breaks_in`,
+   and `rename.to` on every release where `example.after` runs.
+   So an old name that `breaks_in` keeps as a stub, which only raises when it is used, fails this check.
+   For a renamed keyword argument, every callable in `rename.keyword_of` must resolve on every release where an example runs.
+   It must also have `rename.to` as an explicit parameter on `breaks_in` and on `works_since`, as `inspect.signature` shows it.
    A callable that takes it only through `**kwargs` fails this check and doesn't belong in the list,
    because `example.after` could run on it while the argument is ignored.
    CI runs it on the notices that a pull request changes, on every notice when the tools change,

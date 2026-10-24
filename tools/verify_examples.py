@@ -20,11 +20,19 @@ on real releases of its package:
   release just before it, ``example.after`` must fail, so that ``works_since``
   is the first release on which it runs. For a rename, that exception must
   name the new name;
+- for a rename, the paths must resolve with ``pkgutil.resolve_name`` where the
+  examples need them: ``rename.from`` on every release where ``example.before``
+  runs, but not on ``breaks_in``, and ``rename.to`` on every release where
+  ``example.after`` runs. For a renamed keyword argument, each callable in
+  ``rename.keyword_of`` must resolve on every release where an example runs;
 - for a renamed keyword argument, each callable in ``rename.keyword_of`` must
-  take ``rename.to`` as an explicit parameter on ``breaks_in`` and on
+  also take ``rename.to`` as an explicit parameter on ``breaks_in`` and on
   ``works_since``, as ``inspect.signature`` shows it. Taking it only through
   ``**kwargs`` does not count, because then ``example.after`` can run although
   the callable ignores the argument.
+
+The paths and signatures are read by one probe per release, which runs like an
+example in the environment of that release.
 
 Releases and their upload times come from PyPI's JSON Simple API (PEP 691 and
 PEP 700). Each version is installed with ``uv`` together with its dependencies
@@ -171,8 +179,47 @@ except BaseException as error:
     raise
 """
 
-# The exit code of signature_script() when the parameter is not explicit.
-NO_PARAMETER = 3
+# Resolves paths and reads signatures with one release installed. It runs like an example,
+# so importing the package is offline too. It reads the request from PROBE_REQUEST and
+# writes what it found to PROBE_RESULT, both JSON in its working directory.
+PROBE_REQUEST = "probe-request.json"
+PROBE_RESULT = "probe-result.json"
+PROBE_SCRIPT = f"""\
+import inspect
+import json
+import pkgutil
+import traceback
+
+EXPLICIT = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+
+
+def error_of(error):
+    return traceback.format_exception_only(error)[-1].strip()
+
+
+with open({PROBE_REQUEST!r}, encoding="utf-8") as request_file:
+    request = json.load(request_file)
+paths = {{}}
+for path in request["paths"]:
+    try:
+        pkgutil.resolve_name(path)
+    except Exception as error:
+        paths[path] = error_of(error)
+    else:
+        paths[path] = None
+signatures = []
+for target, keyword in request["signatures"]:
+    entry = {{"target": target, "keyword": keyword, "explicit": None, "error": None}}
+    try:
+        parameter = inspect.signature(pkgutil.resolve_name(target)).parameters.get(keyword)
+    except Exception as error:
+        entry["error"] = error_of(error)
+    else:
+        entry["explicit"] = parameter is not None and parameter.kind in EXPLICIT
+    signatures.append(entry)
+with open({PROBE_RESULT!r}, "w", encoding="utf-8") as result_file:
+    json.dump({{"paths": paths, "signatures": signatures}}, result_file)
+"""
 
 Fetcher = Callable[[str], dict[Version, dt.datetime]]
 Installer = Callable[[str, Version, str, str, Path], Path]
@@ -209,6 +256,41 @@ class SignatureCheck:
 
 
 @dataclass(frozen=True)
+class PathCheck:
+    """Check that a path of a rename resolves on one version, or that it doesn't.
+
+    ``field`` is the field the path comes from, such as ``rename.from``, and
+    ``where`` says why the version needs it, such as "example.before runs".
+    """
+
+    version: Version
+    field: str
+    path: str
+    should_exist: bool
+    where: str
+
+    @property
+    def label(self) -> str:
+        return self.field
+
+
+@dataclass(frozen=True)
+class Probe:
+    """What the probe found with one release installed, or why it found nothing.
+
+    ``paths`` maps each path to None if it resolves, or else to the error that
+    resolving it raised. ``signatures`` maps a callable and a keyword to True if
+    the callable takes the keyword as an explicit parameter, to False if not, or
+    to the error. ``failure`` says why the probe found nothing, or is "".
+    """
+
+    paths: Mapping[str, str | None] = dataclasses.field(default_factory=dict)
+    signatures: Mapping[tuple[str, str], bool | str] = dataclasses.field(default_factory=dict)
+    failure: str = ""
+    used_network: bool = False
+
+
+@dataclass(frozen=True)
 class Run:
     """How an example ended.
 
@@ -237,7 +319,7 @@ class Run:
 
 @dataclass(frozen=True)
 class Result:
-    check: Check | SignatureCheck
+    check: Check | SignatureCheck | PathCheck
     passed: bool
     detail: str
 
@@ -443,37 +525,113 @@ def evaluate(  # noqa: PLR0911 - one return for each way an example can end
     return Result(check, True, f"fails as expected: {run.summary}")
 
 
-def signature_script(target: str, keyword: str) -> str:
-    """Return code that exits with NO_PARAMETER unless ``target`` takes ``keyword`` explicitly.
+def plan_path_checks(rename: Mapping[str, Any], checks: Sequence[Check]) -> list[PathCheck]:
+    """Decide on which versions the paths of a rename must resolve, or must not.
 
-    It runs like an example, so importing the package is offline too.
+    ``rename.from`` resolves where ``example.before`` runs and not where it must
+    fail, and ``rename.to`` resolves where ``example.after`` runs. Each callable
+    of a renamed keyword argument resolves where an example runs.
     """
-    return f"""\
-import inspect
-import pkgutil
-import sys
+    plan: dict[Version, dict[str, bool]] = {}
+    for check in checks:
+        plan.setdefault(check.version, {})[check.example] = check.should_run
+    path_checks = []
+    for version, examples in plan.items():
+        if "keyword_of" in rename:
+            path_checks += _callables_where_examples_run(version, examples, rename["keyword_of"])
+            continue
+        before, after = examples.get("before"), examples.get("after")
+        if before is not None:
+            where = "example.before runs" if before else "example.before must fail"
+            path_checks.append(PathCheck(version, "rename.from", rename["from"], before, where))
+        if after:
+            where = "example.after runs"
+            path_checks.append(PathCheck(version, "rename.to", rename["to"], True, where))
+    return path_checks
 
-found = pkgutil.resolve_name({target!r})
-parameter = inspect.signature(found).parameters.get({keyword!r})
-explicit = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-if parameter is None or parameter.kind not in explicit:
-    sys.exit({NO_PARAMETER})
-"""
+
+def _callables_where_examples_run(
+    version: Version, examples: Mapping[str, bool], callables: Sequence[str]
+) -> list[PathCheck]:
+    running = [example for example, runs in examples.items() if runs]
+    if not running:
+        return []
+    where = "both examples run" if len(running) > 1 else f"example.{running[0]} runs"
+    return [PathCheck(version, "rename.keyword_of", path, True, where) for path in callables]
 
 
-def evaluate_signature(check: SignatureCheck, run: Run) -> Result:
-    """Compare how signature_script() ended with what the notice says."""
+def run_probe(
+    interpreter: Path,
+    paths: Sequence[str],
+    signatures: Sequence[tuple[str, str]],
+    workdir: Path,
+    timeout: float = EXAMPLE_TIMEOUT,
+) -> Probe:
+    """Resolve paths and read signatures with one release installed, in one run like an example."""
+    workdir.mkdir()
+    request = {"paths": list(paths), "signatures": [list(pair) for pair in signatures]}
+    (workdir / PROBE_REQUEST).write_text(json.dumps(request), encoding="utf-8")
+    run = run_example(interpreter, PROBE_SCRIPT, workdir, timeout)
     if run.returncode is None:
-        return Result(check, False, "did not finish in time, so it was stopped")
-    if run.returncode == 0:
+        return Probe(failure="did not finish in time, so it was stopped")
+    if run.returncode != 0:
+        return Probe(failure=f"could not be checked: {run.summary}")
+    try:
+        found = json.loads((workdir / PROBE_RESULT).read_text(encoding="utf-8"))
+        return Probe(
+            dict(found["paths"]),
+            {
+                (entry["target"], entry["keyword"]): entry["error"] or entry["explicit"]
+                for entry in found["signatures"]
+            },
+            used_network=run.used_network,
+        )
+    except FileNotFoundError:
+        return Probe(failure="could not be checked: the probe wrote no results")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return Probe(failure="could not be checked: the probe wrote results that are not valid")
+
+
+def evaluate_path(  # noqa: PLR0911 - one return for each way a path check can end
+    check: PathCheck, probe: Probe
+) -> Result:
+    """Compare what the probe found for a path with what the rename needs."""
+    if probe.failure:
+        return Result(check, False, probe.failure)
+    if check.path not in probe.paths:
+        return Result(check, False, "could not be checked: the probe has no result for it")
+    error = probe.paths[check.path]
+    # The report shows the field, such as rename.from, before the message.
+    on = f"on {check.version}, where {check.where}"
+    if check.should_exist:
+        if error is None:
+            return Result(check, True, f"{check.path} exists")
+        return Result(check, False, f"{check.path} does not exist {on} ({error})")
+    if error is None:
+        return Result(check, False, f"{check.path} still exists {on}")
+    if probe.used_network:
+        # A path that fails to resolve after a blocked network call isn't proven to be gone.
+        message = f"could not be checked: it failed after a network call was blocked ({error})"
+        return Result(check, False, message)
+    return Result(check, True, f"{check.path} is gone")
+
+
+def evaluate_signature(check: SignatureCheck, probe: Probe) -> Result:
+    """Compare what the probe found for a signature with what the notice says."""
+    if probe.failure:
+        return Result(check, False, probe.failure)
+    found = probe.signatures.get((check.target, check.keyword))
+    if found is True:
         return Result(check, True, f"takes {check.keyword} as an explicit parameter")
-    if run.returncode == NO_PARAMETER:
+    if found is False:
         message = (
             f"has no explicit parameter {check.keyword}, and taking it through **kwargs "
             f"does not count. Check the versions, or remove {check.target} from rename.keyword_of."
         )
         return Result(check, False, message)
-    return Result(check, False, f"could not be checked: {run.summary}")
+    if found is None:
+        return Result(check, False, "could not be checked: the probe has no result for it")
+    return Result(check, False, f"could not be checked: {found}")
 
 
 @functools.cache
@@ -519,6 +677,7 @@ def verify_notice(
 
     releases = fetch(name)
     checks = plan_checks(releases, breaks_in, works_since)
+    path_checks = plan_path_checks(notice["rename"], checks) if notice["type"] == "rename" else []
     results = []
     with tempfile.TemporaryDirectory(prefix="breakwise-") as tmp_name:
         tmp = Path(tmp_name).resolve()
@@ -538,10 +697,21 @@ def verify_notice(
             )
             expected_error = None if check.should_run else expected_errors[check.example]
             results.append(evaluate(check, run, expected_error))
-        for number, signature in enumerate(signature_checks):
-            code = signature_script(signature.target, signature.keyword)
-            run = run_example(interpreter(signature.version), code, tmp / f"signature-{number}")
-            results.append(evaluate_signature(signature, _shorten_paths(run, tmp)))
+        # One probe for each version reads every path and signature that the version needs.
+        probes: dict[Version, Probe] = {}
+        versions = [c.version for c in path_checks] + [s.version for s in signature_checks]
+        for number, version in enumerate(dict.fromkeys(versions)):
+            paths = [check.path for check in path_checks if check.version == version]
+            signatures = [(s.target, s.keyword) for s in signature_checks if s.version == version]
+            probe = run_probe(
+                interpreter(version),
+                list(dict.fromkeys(paths)),
+                signatures,
+                tmp / f"probe-{number}",
+            )
+            probes[version] = _shorten_probe(probe, tmp)
+        results += [evaluate_path(check, probes[check.version]) for check in path_checks]
+        results += [evaluate_signature(check, probes[check.version]) for check in signature_checks]
     return results
 
 
@@ -551,6 +721,21 @@ def _shorten_paths(run: Run, tmp: Path) -> Run:
         run,
         stderr=run.stderr.replace(str(tmp), "<tmp>"),
         error=run.error.replace(str(tmp), "<tmp>"),
+    )
+
+
+def _shorten_probe(probe: Probe, tmp: Path) -> Probe:
+    def shorten(text: str) -> str:
+        return text.replace(str(tmp), "<tmp>")
+
+    return dataclasses.replace(
+        probe,
+        paths={path: error and shorten(error) for path, error in probe.paths.items()},
+        signatures={
+            key: found if isinstance(found, bool) else shorten(found)
+            for key, found in probe.signatures.items()
+        },
+        failure=shorten(probe.failure),
     )
 
 
