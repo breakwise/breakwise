@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -587,14 +588,20 @@ def test_run_summary_is_one_short_line() -> None:
     assert ve.Run(1, "E" * 200).summary == "E" * 200
 
 
+SIGNATURE = ("demo.make", "new")
+
+
 @pytest.mark.parametrize(
-    ("returncode", "error", "passed", "detail"),
+    ("probe", "passed", "detail"),
     [
-        (0, "", True, "takes new as an explicit parameter"),
-        (None, "", False, "did not finish in time, so it was stopped"),
+        (ve.Probe(signatures={SIGNATURE: True}), True, "takes new as an explicit parameter"),
         (
-            ve.NO_PARAMETER,
-            "SystemExit: 3\n",
+            ve.Probe(failure="did not finish in time, so it was stopped"),
+            False,
+            "did not finish in time, so it was stopped",
+        ),
+        (
+            ve.Probe(signatures={SIGNATURE: False}),
             False,
             (
                 "has no explicit parameter new, and taking it through **kwargs does not count. "
@@ -602,39 +609,189 @@ def test_run_summary_is_one_short_line() -> None:
             ),
         ),
         (
-            1,
-            "ModuleNotFoundError: No module named 'demo'\n",
+            ve.Probe(signatures={SIGNATURE: "ModuleNotFoundError: No module named 'demo'"}),
             False,
             "could not be checked: ModuleNotFoundError: No module named 'demo'",
         ),
+        (ve.Probe(), False, "could not be checked: the probe has no result for it"),
     ],
 )
-def test_evaluate_signature(returncode: int | None, error: str, passed: bool, detail: str) -> None:
-    check = ve.SignatureCheck(Version("2.0.0"), "demo.make", "new")
-    result = ve.evaluate_signature(check, ve.Run(returncode, "", error))
+def test_evaluate_signature(probe: ve.Probe, passed: bool, detail: str) -> None:
+    check = ve.SignatureCheck(Version("2.0.0"), *SIGNATURE)
+    result = ve.evaluate_signature(check, probe)
     assert (result.check, result.passed, result.detail) == (check, passed, detail)
 
 
 @posix_only
 @pytest.mark.parametrize(
-    ("target", "keyword", "returncode"),
+    ("target", "keyword", "found"),
     [
-        ("json.dumps", "indent", 0),  # keyword-only
-        ("textwrap.wrap", "width", 0),  # positional or keyword
-        ("argparse.ArgumentParser", "prog", 0),  # a class, by its __init__
-        ("textwrap.TextWrapper.wrap", "text", 0),  # a method
-        ("textwrap.wrap", "break_long_words", ve.NO_PARAMETER),  # only through **kwargs
-        ("json.dumps", "missing", ve.NO_PARAMETER),
-        ("builtins.divmod", "x", ve.NO_PARAMETER),  # positional-only
-        ("textwrap.missing", "text", 1),
-        ("missing_module.f", "text", 1),
+        ("json.dumps", "indent", True),  # keyword-only
+        ("textwrap.wrap", "width", True),  # positional or keyword
+        ("argparse.ArgumentParser", "prog", True),  # a class, by its __init__
+        ("textwrap.TextWrapper.wrap", "text", True),  # a method
+        ("textwrap.wrap", "break_long_words", False),  # only through **kwargs
+        ("json.dumps", "missing", False),
+        ("builtins.divmod", "x", False),  # positional-only
+        (
+            "textwrap.missing",
+            "text",
+            "AttributeError: module 'textwrap' has no attribute 'missing'",
+        ),
+        ("missing_module.f", "text", "ModuleNotFoundError: No module named 'missing_module'"),
     ],
 )
-def test_signature_script_accepts_only_explicit_keyword_parameters(
-    tmp_path: Path, target: str, keyword: str, returncode: int
+def test_the_probe_accepts_only_explicit_keyword_parameters(
+    tmp_path: Path, target: str, keyword: str, found: bool | str
 ) -> None:
-    run = ve.run_example(PYTHON, ve.signature_script(target, keyword), tmp_path)
-    assert run.returncode == returncode, run.error
+    probe = ve.run_probe(PYTHON, [], [(target, keyword)], tmp_path / "probe")
+    assert probe == ve.Probe({}, {(target, keyword): found})
+
+
+@posix_only
+def test_the_probe_resolves_paths_as_imports_and_getattr_do(tmp_path: Path) -> None:
+    paths = [
+        "json.dumps",
+        "textwrap.TextWrapper.wrap",  # a method of a class
+        "email.mime.text.MIMEText",  # a module that its package doesn't import
+        "os.path",
+        "json.missing",
+        "missing_module.f",
+    ]
+    probe = ve.run_probe(PYTHON, paths, [], tmp_path / "probe")
+    assert probe.paths == {
+        "json.dumps": None,
+        "textwrap.TextWrapper.wrap": None,
+        "email.mime.text.MIMEText": None,
+        "os.path": None,
+        "json.missing": "AttributeError: module 'json' has no attribute 'missing'",
+        "missing_module.f": "ModuleNotFoundError: No module named 'missing_module'",
+    }
+    assert (probe.failure, probe.used_network) == ("", False)
+
+
+@pytest.mark.parametrize(
+    ("run", "written", "failure"),
+    [
+        (ve.Run(None), None, "did not finish in time, so it was stopped"),
+        (ve.Run(1, "", "SystemExit: 3\n"), None, "could not be checked: SystemExit: 3"),
+        (ve.Run(0), None, "could not be checked: the probe wrote no results"),
+        (ve.Run(0), "not JSON", "could not be checked: the probe wrote results that are not valid"),
+        (ve.Run(0), "[1]", "could not be checked: the probe wrote results that are not valid"),
+        (
+            ve.Run(0),
+            '{"paths": {}}',
+            "could not be checked: the probe wrote results that are not valid",
+        ),
+    ],
+)
+def test_a_probe_that_fails_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    run: ve.Run,
+    written: str | None,
+    failure: str,
+) -> None:
+    def fake_run(interpreter: Path, code: str, workdir: Path, timeout: float) -> ve.Run:
+        assert code == ve.PROBE_SCRIPT
+        if written is not None:
+            (workdir / ve.PROBE_RESULT).write_text(written, encoding="utf-8")
+        return run
+
+    monkeypatch.setattr(ve, "run_example", fake_run)
+    assert ve.run_probe(PYTHON, ["a.b"], [], tmp_path / "probe") == ve.Probe(failure=failure)
+
+
+def test_a_probe_reads_what_it_wrote_and_whether_it_used_the_network(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_run(interpreter: Path, code: str, workdir: Path, timeout: float) -> ve.Run:
+        request = json.loads((workdir / ve.PROBE_REQUEST).read_text(encoding="utf-8"))
+        assert request == {"paths": ["a.b"], "signatures": [["a.f", "x"]]}
+        result = {
+            "paths": {"a.b": None},
+            "signatures": [{"target": "a.f", "keyword": "x", "explicit": True, "error": None}],
+        }
+        (workdir / ve.PROBE_RESULT).write_text(json.dumps(result), encoding="utf-8")
+        return ve.Run(0, used_network=True)
+
+    monkeypatch.setattr(ve, "run_example", fake_run)
+    probe = ve.run_probe(PYTHON, ["a.b"], [("a.f", "x")], tmp_path / "probe")
+    assert probe == ve.Probe({"a.b": None}, {("a.f", "x"): True}, used_network=True)
+
+
+GONE = "AttributeError: module 'demo' has no attribute 'Old'"
+
+
+@pytest.mark.parametrize(
+    ("should_exist", "probe", "passed", "detail"),
+    [
+        (True, ve.Probe({"demo.Old": None}), True, "demo.Old exists"),
+        (
+            True,
+            ve.Probe({"demo.Old": GONE}),
+            False,
+            f"demo.Old does not exist on 1.0, where example.before runs ({GONE})",
+        ),
+        (False, ve.Probe({"demo.Old": GONE}), True, "demo.Old is gone"),
+        (
+            False,
+            ve.Probe({"demo.Old": None}),
+            False,
+            "demo.Old still exists on 1.0, where example.before runs",
+        ),
+        (
+            False,
+            ve.Probe({"demo.Old": GONE}, used_network=True),
+            False,
+            f"could not be checked: it failed after a network call was blocked ({GONE})",
+        ),
+        (True, ve.Probe(failure="did not finish in time"), False, "did not finish in time"),
+        (True, ve.Probe(), False, "could not be checked: the probe has no result for it"),
+    ],
+)
+def test_evaluate_path(should_exist: bool, probe: ve.Probe, passed: bool, detail: str) -> None:
+    check = ve.PathCheck(
+        Version("1.0"), "rename.from", "demo.Old", should_exist, "example.before runs"
+    )
+    result = ve.evaluate_path(check, probe)
+    assert (result.check, result.passed, result.detail) == (check, passed, detail)
+
+
+def path_plan(
+    rename: dict[str, Any], available: dict[Version, dt.datetime], breaks_in: str, works_since: str
+) -> list[tuple[str, str, str, bool, str]]:
+    checks = ve.plan_checks(available, Version(breaks_in), Version(works_since))
+    return [
+        (str(c.version), c.field, c.path, c.should_exist, c.where)
+        for c in ve.plan_path_checks(rename, checks)
+    ]
+
+
+def test_rename_paths_are_checked_where_the_examples_need_them() -> None:
+    rename = {"from": "demo.Old", "to": "demo.New"}
+    assert path_plan(rename, releases("1.0", "1.5", "1.9", "2.0rc1", "2.0"), "2.0", "1.5") == [
+        ("1.9", "rename.from", "demo.Old", True, "example.before runs"),
+        ("1.9", "rename.to", "demo.New", True, "example.after runs"),
+        # The pre-release just before breaks_in still runs example.before.
+        ("2.0rc1", "rename.from", "demo.Old", True, "example.before runs"),
+        ("2.0", "rename.from", "demo.Old", False, "example.before must fail"),
+        ("2.0", "rename.to", "demo.New", True, "example.after runs"),
+        ("1.5", "rename.to", "demo.New", True, "example.after runs"),
+        # On 1.0, example.after must fail, so nothing needs a path there.
+    ]
+
+
+def test_callables_of_a_keyword_are_checked_where_an_example_runs() -> None:
+    rename = {"keyword_of": ["demo.make", "demo.Maker.run"], "from": "old", "to": "new"}
+    assert path_plan(rename, releases("1.0", "1.5", "1.9", "2.0"), "2.0", "1.5") == [
+        ("1.9", "rename.keyword_of", "demo.make", True, "both examples run"),
+        ("1.9", "rename.keyword_of", "demo.Maker.run", True, "both examples run"),
+        ("2.0", "rename.keyword_of", "demo.make", True, "example.after runs"),
+        ("2.0", "rename.keyword_of", "demo.Maker.run", True, "example.after runs"),
+        ("1.5", "rename.keyword_of", "demo.make", True, "example.after runs"),
+        ("1.5", "rename.keyword_of", "demo.Maker.run", True, "example.after runs"),
+    ]
 
 
 # --- A whole notice, offline --------------------------------------------------
@@ -731,8 +888,14 @@ def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
             "ok 1.0.0 example.after: fails as expected: ImportError: cannot import name 'New' "
             f"from 'fakelib' (<tmp>/venv-1.0.0/{site}/fakelib.py)"
         ),
+        "ok 1.9.0 rename.from: fakelib.Old exists",
+        "ok 1.9.0 rename.to: fakelib.New exists",
+        "ok 2.0.0 rename.from: fakelib.Old is gone",
+        "ok 2.0.0 rename.to: fakelib.New exists",
+        "ok 1.5.0 rename.to: fakelib.New exists",
     ]
     # One environment per version, each with dependencies as of a day after the upload.
+    # The paths are checked in the same environments, so nothing more is installed.
     assert index.installed == [
         ("fakelib", "1.9.0", "2026-01-02T12:00:00Z"),
         ("fakelib", "2.0.0", "2026-01-02T12:00:00Z"),
@@ -743,20 +906,46 @@ def test_a_correct_notice_passes_every_check(tmp_path: Path) -> None:
 
 @posix_only
 @pytest.mark.parametrize(
-    ("breaks_in", "works_since", "failure"),
+    ("breaks_in", "works_since", "expected"),
     [
-        ("1.9.0", "1.5.0", "FAIL 1.9.0 example.before: should fail on this version, but it ran"),
-        ("2.0.0", "1.0.0", "FAIL 1.0.0 example.after: should run, but failed: ImportError"),
-        ("2.0.0", "1.9.0", "FAIL 1.5.0 example.after: should fail on this version, but it ran"),
+        (
+            "1.9.0",
+            "1.5.0",
+            [
+                "FAIL 1.9.0 example.before: should fail on this version, but it ran",
+                (
+                    "FAIL 1.9.0 rename.from: fakelib.Old still exists on 1.9.0, "
+                    "where example.before must fail"
+                ),
+            ],
+        ),
+        (
+            "2.0.0",
+            "1.0.0",
+            [
+                "FAIL 1.0.0 example.after: should run, but failed: ImportError",
+                (
+                    "FAIL 1.0.0 rename.to: fakelib.New does not exist on 1.0.0, "
+                    "where example.after runs "
+                    "(AttributeError: module 'fakelib' has no attribute 'New')"
+                ),
+            ],
+        ),
+        (
+            "2.0.0",
+            "1.9.0",
+            ["FAIL 1.5.0 example.after: should fail on this version, but it ran"],
+        ),
     ],
 )
 def test_a_notice_with_wrong_versions_fails(
-    tmp_path: Path, breaks_in: str, works_since: str, failure: str
+    tmp_path: Path, breaks_in: str, works_since: str, expected: list[str]
 ) -> None:
     lines = verify(write_notice(tmp_path, breaks_in, works_since), FakeIndex())
     failures = [line for line in lines if line.startswith("FAIL")]
-    assert len(failures) == 1
-    assert failures[0].startswith(failure)
+    assert len(failures) == len(expected)
+    for failure, start in zip(failures, expected, strict=True):
+        assert failure.startswith(start)
 
 
 @posix_only
@@ -767,10 +956,85 @@ def test_breaks_in_must_be_the_first_release_that_breaks(
     monkeypatch.setitem(FAKE_VERSIONS, "2.0.0b1", "class New: pass\n")
     lines = verify(write_notice(tmp_path), FakeIndex())
     failures = [line for line in lines if line.startswith("FAIL")]
-    assert len(failures) == 1
+    assert len(failures) == 2
     assert failures[0].startswith(
         "FAIL 2.0.0b1 example.before: should run, but failed: ImportError: cannot import name 'Old'"
     )
+    assert failures[1] == (
+        "FAIL 2.0.0b1 rename.from: fakelib.Old does not exist on 2.0.0b1, where example.before "
+        "runs (AttributeError: module 'fakelib' has no attribute 'Old')"
+    )
+
+
+@posix_only
+def test_a_rename_without_works_since_checks_rename_to_on_breaks_in(tmp_path: Path) -> None:
+    notice = write_notice(tmp_path)
+    text = notice.read_text(encoding="utf-8").replace('works_since: "1.5.0"\n', "")
+    notice.write_text(text, encoding="utf-8")
+    lines = verify(notice, FakeIndex())
+    assert [line.split(":")[0] for line in lines] == [
+        "ok 1.9.0 example.before",
+        "ok 2.0.0 example.before",
+        "ok 2.0.0 example.after",
+        "ok 1.9.0 rename.from",
+        "ok 2.0.0 rename.from",
+        "ok 2.0.0 rename.to",
+    ]
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("field", "path", "expected"),
+    [
+        (
+            "from",
+            "fakelib.sub.Old",
+            [
+                (
+                    "FAIL 1.9.0 rename.from: fakelib.sub.Old does not exist on 1.9.0, where "
+                    "example.before runs (AttributeError: module 'fakelib' has no attribute 'sub')"
+                )
+            ],
+        ),
+        (
+            "to",
+            "fakelib.sub.New",
+            [
+                f"FAIL {version} rename.to: fakelib.sub.New does not exist on {version}, where "
+                "example.after runs (AttributeError: module 'fakelib' has no attribute 'sub')"
+                for version in ("1.9.0", "2.0.0", "1.5.0")
+            ],
+        ),
+    ],
+)
+def test_a_rename_path_in_a_module_that_does_not_exist_fails(
+    tmp_path: Path, field: str, path: str, expected: list[str]
+) -> None:
+    # The examples import the right names, so only the path in the notice is wrong.
+    notice = write_notice(tmp_path)
+    old = f"  {field}: fakelib.{path.rpartition('.')[2]}\n"
+    text = notice.read_text(encoding="utf-8").replace(old, f"  {field}: {path}\n")
+    notice.write_text(text, encoding="utf-8")
+    lines = verify(notice, FakeIndex())
+    assert [line for line in lines if line.startswith("FAIL")] == expected
+
+
+@posix_only
+def test_an_old_name_that_is_only_a_stub_on_breaks_in_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # example.before fails on 2.0.0 with an error that names Old, but Old still resolves.
+    stub = (
+        "class New: pass\n"
+        "class Old:\n"
+        "    def __init__(self):\n"
+        "        raise ImportError('Old was removed')\n"
+    )
+    monkeypatch.setitem(FAKE_VERSIONS, "2.0.0", stub)
+    lines = verify(write_notice(tmp_path), FakeIndex())
+    assert [line for line in lines if line.startswith("FAIL")] == [
+        "FAIL 2.0.0 rename.from: fakelib.Old still exists on 2.0.0, where example.before must fail"
+    ]
 
 
 @posix_only
@@ -886,10 +1150,13 @@ def test_a_correct_keyword_rename_passes_every_check(tmp_path: Path) -> None:
         "TypeError: make() got an unexpected keyword argument 'new'"
     )
     assert lines[6:] == [
+        "ok 1.9.0 rename.keyword_of: fakelib.make exists",
+        "ok 2.0.0 rename.keyword_of: fakelib.make exists",
+        "ok 1.5.0 rename.keyword_of: fakelib.make exists",
         "ok 2.0.0 signature of fakelib.make: takes new as an explicit parameter",
         "ok 1.5.0 signature of fakelib.make: takes new as an explicit parameter",
     ]
-    # The signatures are checked in the environments the examples ran in.
+    # The paths and signatures are checked in the environments the examples ran in.
     assert [version for _, version, _ in index.installed] == ["1.9.0", "2.0.0", "1.5.0", "1.0.0"]
 
 
@@ -900,6 +1167,8 @@ def test_without_works_since_only_breaks_in_has_its_signature_checked(tmp_path: 
         "ok 1.9.0 example.before",
         "ok 2.0.0 example.before",
         "ok 2.0.0 example.after",
+        "ok 1.9.0 rename.keyword_of",
+        "ok 2.0.0 rename.keyword_of",
         "ok 2.0.0 signature of fakelib.make",
     ]
 
@@ -929,7 +1198,7 @@ def test_an_explicit_keyword_next_to_kwargs_passes(
     )
     lines = verify(write_keyword_notice(tmp_path), FakeIndex(KEYWORD_VERSIONS))
     assert all(line.startswith("ok") for line in lines)
-    assert len(lines) == 8
+    assert len(lines) == 11
 
 
 @posix_only
@@ -939,6 +1208,24 @@ def test_every_callable_in_keyword_of_is_checked(tmp_path: Path) -> None:
     text = text.replace("    - fakelib.make\n", "    - fakelib.make\n    - fakelib.build\n")
     notice.write_text(text, encoding="utf-8")
     lines = verify(notice, FakeIndex(KEYWORD_VERSIONS))
+    missing = "(AttributeError: module 'fakelib' has no attribute 'build')"
+    assert [line for line in lines if "rename.keyword_of" in line] == [
+        "ok 1.9.0 rename.keyword_of: fakelib.make exists",
+        (
+            f"FAIL 1.9.0 rename.keyword_of: fakelib.build does not exist on 1.9.0, where both "
+            f"examples run {missing}"
+        ),
+        "ok 2.0.0 rename.keyword_of: fakelib.make exists",
+        (
+            f"FAIL 2.0.0 rename.keyword_of: fakelib.build does not exist on 2.0.0, where "
+            f"example.after runs {missing}"
+        ),
+        "ok 1.5.0 rename.keyword_of: fakelib.make exists",
+        (
+            f"FAIL 1.5.0 rename.keyword_of: fakelib.build does not exist on 1.5.0, where "
+            f"example.after runs {missing}"
+        ),
+    ]
     assert [line for line in lines if "signature" in line] == [
         "ok 2.0.0 signature of fakelib.make: takes new as an explicit parameter",
         (
@@ -963,6 +1250,60 @@ def test_before_must_fail_because_of_the_old_keyword(
     assert [line for line in lines if line.startswith("FAIL")] == [
         "FAIL 2.0.0 example.before: fails, but not because of old: ValueError: no"
     ]
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("write", "versions", "asked"),
+    [
+        pytest.param(
+            write_notice,
+            FAKE_VERSIONS,
+            {
+                "1.9.0": (["fakelib.Old", "fakelib.New"], []),
+                "2.0.0": (["fakelib.Old", "fakelib.New"], []),
+                "1.5.0": (["fakelib.New"], []),
+            },
+            id="a renamed name",
+        ),
+        pytest.param(
+            write_keyword_notice,
+            KEYWORD_VERSIONS,
+            {
+                "1.9.0": (["fakelib.make"], []),
+                "2.0.0": (["fakelib.make"], [("fakelib.make", "new")]),
+                "1.5.0": (["fakelib.make"], [("fakelib.make", "new")]),
+            },
+            id="a renamed keyword",
+        ),
+    ],
+)
+def test_each_probe_asks_only_for_what_its_release_needs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write: Callable[[Path], Path],
+    versions: dict[str, str],
+    asked: dict[str, tuple[list[str], list[tuple[str, str]]]],
+) -> None:
+    requests: dict[str, tuple[list[str], list[tuple[str, str]]]] = {}
+    run_probe = ve.run_probe
+
+    def recording(
+        interpreter: Path,
+        paths: Sequence[str],
+        signatures: Sequence[tuple[str, str]],
+        workdir: Path,
+        timeout: float = ve.EXAMPLE_TIMEOUT,
+    ) -> ve.Probe:
+        # FakeIndex puts each release in <tmp>/venv-<version>/bin/python.
+        version = interpreter.parent.parent.name.removeprefix("venv-")
+        requests[version] = (list(paths), list(signatures))
+        return run_probe(interpreter, paths, signatures, workdir, timeout)
+
+    monkeypatch.setattr(ve, "run_probe", recording)
+    lines = verify(write(tmp_path), FakeIndex(versions))
+    assert all(line.startswith("ok") for line in lines)
+    assert requests == asked
 
 
 # --- Choosing notices ---------------------------------------------------------
