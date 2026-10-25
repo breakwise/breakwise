@@ -15,6 +15,9 @@ RELEASED_SCHEMAS = {
     "schema/notice-0.1.schema.json": (
         "38d4785467ab0515960e9acb32fe53c46d5b3ae439c4b571b6c1d52046b7478c"
     ),
+    "schema/notice-0.2.schema.json": (
+        "25271d2dd195944b7cf299034f628d48e32c8853b882d253831f5055ce231773"
+    ),
 }
 
 
