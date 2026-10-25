@@ -61,7 +61,7 @@ from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # The tools read only the latest format. Earlier schemas stay in schema/, unchanged.
-SCHEMA_FILE = Path("schema/notice-0.2.schema.json")
+SCHEMA_FILE = Path("schema/notice-0.3.schema.json")
 NOTICES_DIR = Path("notices")
 README_FILE = Path("README.md")
 
@@ -72,11 +72,33 @@ README_YAML_BLOCK = re.compile(r"^```ya?ml\n(.*?)^```$", re.MULTILINE | re.DOTAL
 # Empty values are left to the schema, which says that they are missing.
 TEXT_TAGS = frozenset({"tag:yaml.org,2002:str", "tag:yaml.org,2002:null"})
 
-# What the schema's "not" rules forbid, by the field they name.
+# What the schema's "not" rules forbid, by the path of the field they name.
 NOT_ALLOWED = {
     "rename": "`rename` is only allowed when `type` is `rename`.",
     "instructions": (
         "`instructions` is not allowed when `type` is `rename`: a rename is fixed automatically."
+    ),
+    "affects": (
+        "`affects` is not allowed when `type` is `rename`: `rename.from` names what breaks."
+    ),
+    "example.fails_with.after": (
+        "`example.fails_with.after` is only allowed with `works_since`: "
+        "it says how `example.after` fails on the release before `works_since`."
+    ),
+}
+
+# What the schema requires only for some notices, by the path of the field.
+REQUIRED = {
+    "affects": (
+        "`affects` is required when `type` is not `rename`: it names the code that breaks."
+    ),
+    "example.fails_with": (
+        "`example.fails_with` is required when `type` is not `rename`: "
+        "it says how `example.before` fails on `breaks_in`."
+    ),
+    "example.fails_with.after": (
+        "`example.fails_with.after` is required when `type` is not `rename` and `works_since` "
+        "is set: it says how `example.after` fails on the release before `works_since`."
     ),
 }
 
@@ -176,18 +198,39 @@ def field_name(path: Iterable[str | int]) -> str:
 def describe(error: ValidationError) -> str:
     """Turn a schema error into a message that says what is expected."""
     field = field_name(error.absolute_path)
-    description = error.schema.get("description") if isinstance(error.schema, Mapping) else None
-    if error.validator == "pattern" and description:
-        message = f"{error.instance!r} is not valid. Expected {description}"
-    elif error.validator == "not" and not field:
-        # The schema's two "not" rules are {"required": [<field>]}.
-        (name,) = cast("Mapping[str, list[str]]", error.validator_value)["required"]
-        message = NOT_ALLOWED[name]
-    elif error.validator == "type" and error.instance is None:
-        message = "has no value."
-    else:
-        message = error.message
+    if error.validator == "not":
+        rule = cast("Mapping[str, list[str]]", error.validator_value)
+        if "required" in rule:
+            # A field that a rule forbids, written as {"required": [<field>]} at its parent.
+            (name,) = rule["required"]
+            return NOT_ALLOWED[field_name([*error.absolute_path, name])]
+    if error.validator == "required":
+        # A rule that requires a field only for some notices names that one field.
+        names = cast("list[str]", error.validator_value)
+        required = REQUIRED.get(field_name([*error.absolute_path, names[0]]))
+        if len(names) == 1 and required is not None:
+            return required
+    message = _expected(error)
     return f"{field}: {message}" if field else message
+
+
+def _expected(error: ValidationError) -> str:
+    description = error.schema.get("description") if isinstance(error.schema, Mapping) else None
+    if error.validator in {"pattern", "const"} and description:
+        return f"{error.instance!r} is not valid. Expected {description}"
+    if error.validator == "not":
+        # The other "not" rule is the one for text: it must not match a newline.
+        return "must be one line."
+    if error.validator == "dependentRequired":
+        # {"when": ["keyword"]}: the field that is there, and the field it needs.
+        rules = cast("Mapping[str, list[str]]", error.validator_value)
+        fields = cast("Mapping[str, object]", error.instance)
+        name = next(name for name in rules if name in fields)
+        needed = next(needed for needed in rules[name] if needed not in fields)
+        return f"`{name}` is only allowed together with `{needed}`."
+    if error.validator == "type" and error.instance is None:
+        return "has no value."
+    return error.message
 
 
 def distinguishing_names(old: str, new: str) -> tuple[str, str]:

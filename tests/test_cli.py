@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 RENAME = """\
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
@@ -52,7 +52,7 @@ references:
 
 REMOVAL = """\
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-0002
 status: draft
 published: "2026-10-22"
@@ -78,7 +78,7 @@ references:
 
 KEYWORD_RENAME = """\
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-0003
 status: draft
 published: "2026-10-23"
@@ -289,11 +289,14 @@ def test_explain_says_why_it_shows_nothing(
 
 
 @pytest.mark.usefixtures("bundled")
-def test_an_id_too_long_for_a_file_name_is_not_there(capsys: pytest.CaptureFixture[str]) -> None:
-    notice_id = "BW-2026-" + "1" * 300
-    code, out, err = explain(capsys, notice_id)
-    assert (code, out) == (1, "")
-    assert err.startswith(f"breakwise: There is no notice {notice_id} in the notices")
+@pytest.mark.parametrize("digits", [9, 300])
+def test_an_id_with_more_than_eight_digits_is_not_a_notice_id(
+    capsys: pytest.CaptureFixture[str], digits: int
+) -> None:
+    # Format 0.3 allows eight digits at most, so an ID never makes a file name too long.
+    notice_id = "BW-2026-" + "1" * digits
+    message = f"breakwise: {notice_id!r} is not a notice ID. IDs look like BW-2026-0001.\n"
+    assert explain(capsys, notice_id) == (1, "", message)
 
 
 @pytest.mark.usefixtures("bundled")

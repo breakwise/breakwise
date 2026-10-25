@@ -1,4 +1,4 @@
-# Notice format (v0.2)
+# Notice format (v0.3)
 
 A **notice** describes one breaking change in one package.
 Each notice is a YAML file stored at:
@@ -12,9 +12,10 @@ notices/<ecosystem>/<package>/<id>.yaml
 
 Example: [`notices/pypi/pydantic-ai/BW-2026-0001.yaml`](../notices/pypi/pydantic-ai/BW-2026-0001.yaml)
 
-The machine-readable definition is [`schema/notice-0.2.schema.json`](../schema/notice-0.2.schema.json)
+The machine-readable definition is [`schema/notice-0.3.schema.json`](../schema/notice-0.3.schema.json)
 (JSON Schema, draft 2020-12). If this page and the schema disagree, the schema wins.
-A released format never changes: [`schema/notice-0.1.schema.json`](../schema/notice-0.1.schema.json) stays as it was,
+A released format never changes: [`schema/notice-0.1.schema.json`](../schema/notice-0.1.schema.json)
+and [`schema/notice-0.2.schema.json`](../schema/notice-0.2.schema.json) stay as they were,
 and the tools read only the latest format.
 
 The format may change before v1.0. Every change is listed in the [changelog](#changelog) below.
@@ -23,8 +24,8 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `schema_version` | yes | Version of this format: `"0.2"`. |
-| `id` | yes | Unique ID `BW-<year>-<number>`: the year it was published and a number of four digits or more, without extra leading zeros, e.g. `BW-2026-0001` or `BW-2026-10000`. Never reused. |
+| `schema_version` | yes | Version of this format: `"0.3"`. |
+| `id` | yes | Unique ID `BW-<year>-<number>`: the year it was published and a number of four to eight digits, without extra leading zeros, e.g. `BW-2026-0001` or `BW-2026-10000`. Never reused. |
 | `status` | yes | `draft` (not reviewed yet) or `verified` (checked by a maintainer against the official sources). |
 | `published` | yes | Date the notice was added, as `"YYYY-MM-DD"`. |
 | `modified` | no | Date of the last change to the notice, as `"YYYY-MM-DD"`. |
@@ -34,16 +35,23 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 | `type` | yes | `rename`, `removal`, `signature` (parameters changed) or `behavior` (same code, different result). |
 | `breaks_in` | yes | First version in which the old code stops working. |
 | `works_since` | no | The first release in which the new code works, so the fix can be applied before upgrading. Leave it out if that release can't be found or doesn't install on Python 3.12, for example when the new code already works on the oldest release that installs. Without `works_since`, that release is unknown, so the fix waits until after the upgrade. |
+| `restored_in` | no | The first release in which the old code works again, for example when the package brings an old name back. A notice applies to an upgrade only when the target is before it. |
 | `summary` | yes | One sentence, 10 to 200 characters. |
-| `rename.from`, `rename.to` | when `type` is `rename` | Old and new names. Without `rename.keyword_of`, they are names as users import them: a module, class, function, method or attribute, written as its full dotted path, e.g. `pydantic_ai.models.openai.OpenAIModel`. With it, they are the old and new names of a keyword argument, e.g. `mcp_servers` and `toolsets`. Tools rewrite imports, usages and keyword arguments automatically. |
-| `rename.keyword_of` | no | For a renamed keyword argument: the callables that take it, as full dotted paths, e.g. `pydantic_ai.Agent` or `pydantic_ai.Agent.run`. |
+| `rename.from`, `rename.to` | when `type` is `rename` | Old and new names. Without `rename.keyword_of`, they are names as users import them: a module, class, function, method or attribute, written as its full path, e.g. `pydantic_ai.models.openai.OpenAIModel`, or `pydantic_ai` for a top-level module. With it, they are the old and new names of a keyword argument, e.g. `mcp_servers` and `toolsets`. Tools rewrite imports, usages and keyword arguments automatically. |
+| `rename.keyword_of` | no | For a renamed keyword argument: the callables that take it, as full dotted paths of two parts or more, e.g. `pydantic_ai.Agent` or `pydantic_ai.Agent.run`. |
 | `instructions` | for every other `type`, and never with `rename` | Plain steps to migrate, for people and coding agents, at least 10 characters. |
+| `affects` | for every other `type`, and never with `rename` | The code that the change breaks. An item is a path, written like `rename.from`, e.g. `pydantic_ai.Agent.run_stream`. Or it is a callable with one of its keyword arguments: `path`, `keyword`, and `when`, which is `passed` (the default) when code breaks by passing the keyword, or `omitted` when it breaks by leaving it out, as when a default changed. `when` needs `keyword`. |
 | `example.before`, `example.after` | yes | The smallest code that shows the change. |
+| `example.fails_with.before` | for every other `type`; optional for `rename` | How `example.before` fails on `breaks_in`: `error` is the exception, bare for a builtin such as `TypeError` and as its full path otherwise, such as `pydantic_ai.exceptions.UserError`, and the optional `message` is a part of its message. For a `behavior` change, `error` is `AssertionError`. |
+| `example.fails_with.after` | for every other `type` that has `works_since`; optional for `rename`; never without `works_since` | How `example.after` fails on the release just before `works_since`, written like `example.fails_with.before`. |
 | `references` | yes | `https` links to official sources: changelog, migration guide, release notes or source code. |
+| `withdrawn.date`, `withdrawn.reason` | no | For a notice that should never have existed: the date it was withdrawn, as `"YYYY-MM-DD"`, and why, at least 10 characters. Its ID stays taken. |
 
-Versions follow the package's own scheme ([PEP 440](https://peps.python.org/pep-0440/) for PyPI)
-and are always quoted, e.g. `"2.0.0"`, so YAML keeps them as text: unquoted, `2.10` would become
-the number 2.1. The same applies to dates. Notices are plain YAML, without anchors, aliases or tags.
+Versions follow the package's own scheme ([PEP 440](https://peps.python.org/pep-0440/) for PyPI),
+with an epoch when the package has one, e.g. `"1!2.0"`, and are always quoted, e.g. `"2.0.0"`,
+so YAML keeps them as text: unquoted, `2.10` would become the number 2.1. The same applies to dates.
+Every value except the example code is one line: a newline, even at the end, is not allowed.
+Notices are plain YAML, without anchors, aliases or tags.
 
 ## Rules
 
@@ -94,12 +102,26 @@ the number 2.1. The same applies to dates. Notices are plain YAML, without ancho
    and on every notice on each push to `main` and every week.
 5. **Offline examples.** Examples run without network access and with fake API keys,
    so they must not call real services: an example that fails after trying to reach the network fails the check.
-   For a `behavior` change, use `assert` so that the example fails when the behavior differs.
+   For a `behavior` change, use `assert` so that the example fails when the behavior differs,
+   and `example.fails_with.before.error` is `AssertionError`.
 6. **New notices start as `draft`.** A maintainer checks them against the sources and sets `verified`.
-7. **IDs:** take the next free number, with four digits or more and no extra leading zeros.
+7. **IDs:** take the next free number, with four to eight digits and no extra leading zeros.
    A maintainer fixes any clash when merging.
 
 ## Changelog
+
+- **0.3** (2026-10-25):
+  - `affects` names the code that a change other than a rename breaks: paths,
+    and keyword arguments that break when they are passed or when they are left out.
+  - `example.fails_with` says how the examples fail. Every type but `rename` needs it, with `after` when `works_since` is set,
+    and `after` needs `works_since` for every type. A `behavior` change fails with `AssertionError`.
+  - `restored_in` is the first release in which the old code works again,
+    and `withdrawn` marks a notice that should never have existed, whose ID stays taken.
+  - IDs have four to eight digits, versions may have an epoch such as `1!2.0`,
+    and `rename.from`, `rename.to` and the paths in `affects` may be a single name, such as a top-level module.
+  - Every value except the example code is one line.
+  - A `rename` moves to 0.3 by changing `schema_version`. Every other type also needs `affects` and `example.fails_with`.
+    The schemas of 0.1 and 0.2 stay as they were.
 
 - **0.2** (2026-10-23):
   - `rename.keyword_of` describes a renamed keyword argument, so that tools can fix it automatically.

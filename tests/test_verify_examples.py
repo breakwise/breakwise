@@ -1022,7 +1022,7 @@ FAKE_VERSIONS = {
 
 FAKE_NOTICE = """\
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-9001
 status: draft
 published: "2026-10-21"
@@ -1420,7 +1420,14 @@ def test_any_failure_counts_for_changes_other_than_renames(tmp_path: Path) -> No
     notice = write_notice(tmp_path)
     text = notice.read_text(encoding="utf-8").replace("type: rename", "type: removal")
     text = text.replace(
-        "rename:\n  from: fakelib.Old\n  to: fakelib.New\n", "instructions: Use New instead.\n"
+        "rename:\n  from: fakelib.Old\n  to: fakelib.New\n",
+        "instructions: Use New instead.\naffects:\n  - fakelib.Old\n",
+    )
+    # Format 0.3 requires them for a removal. The verifier doesn't check them yet.
+    text = text.replace(
+        "    New()\n",
+        "    New()\n  fails_with:\n    before:\n      error: ImportError\n"
+        "    after:\n      error: ImportError\n",
     )
     notice.write_text(text, encoding="utf-8")
     lines = verify(notice, FakeIndex())
@@ -1445,7 +1452,7 @@ KEYWORD_VERSIONS = {
 
 KEYWORD_NOTICE = """\
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-9002
 status: draft
 published: "2026-10-23"
