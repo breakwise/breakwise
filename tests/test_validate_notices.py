@@ -621,11 +621,12 @@ def test_an_empty_text_field_is_not_also_more_than_one_line(full_repo: Path) -> 
             id="affects with an unknown field",
         ),
         pytest.param(
+            # A path without a keyword is written alone, so each item is written one way only.
             "full_repo",
-            [("    keyword: result_type\n", "")],
+            [("    keyword: result_type\n    when: passed\n", "")],
             "  - path:",
-            "affects[1]: `when` is only allowed together with `keyword`.",
-            id="when without keyword",
+            "affects[1]: 'keyword' is a required property",
+            id="a path in an object without a keyword",
         ),
         pytest.param(
             "full_repo",

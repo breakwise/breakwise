@@ -116,7 +116,7 @@
       "minLength": 10
     },
     "affects": {
-      "description": "the code that the change breaks: a path, or a callable with a keyword argument that breaks when it is passed or omitted.",
+      "description": "the code that the change breaks: a path, written alone, or a callable with a keyword argument that breaks when it is passed or omitted.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
@@ -130,7 +130,7 @@
         "else": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path"],
+          "required": ["path", "keyword"],
           "properties": {
             "path": {"$ref": "#/$defs/path"},
             "keyword": {"$ref": "#/$defs/keyword"},
@@ -138,9 +138,6 @@
               "enum": ["passed", "omitted"],
               "default": "passed"
             }
-          },
-          "dependentRequired": {
-            "when": ["keyword"]
           }
         }
       }

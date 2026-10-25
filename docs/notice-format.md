@@ -40,7 +40,7 @@ The format may change before v1.0. Every change is listed in the [changelog](#ch
 | `rename.from`, `rename.to` | when `type` is `rename` | Old and new names. Without `rename.keyword_of`, they are names as users import them: a module, class, function, method or attribute, written as its full path, e.g. `pydantic_ai.models.openai.OpenAIModel`, or `pydantic_ai` for a top-level module. With it, they are the old and new names of a keyword argument, e.g. `mcp_servers` and `toolsets`. Tools rewrite imports, usages and keyword arguments automatically. |
 | `rename.keyword_of` | no | For a renamed keyword argument: the callables that take it, as full dotted paths of two parts or more, e.g. `pydantic_ai.Agent` or `pydantic_ai.Agent.run`. |
 | `instructions` | for every other `type`, and never with `rename` | Plain steps to migrate, for people and coding agents, at least 10 characters. |
-| `affects` | for every other `type`, and never with `rename` | The code that the change breaks. An item is a path, written like `rename.from`, e.g. `pydantic_ai.Agent.run_stream`. Or it is a callable with one of its keyword arguments: `path`, `keyword`, and `when`, which is `passed` (the default) when code breaks by passing the keyword, or `omitted` when it breaks by leaving it out, as when a default changed. `when` needs `keyword`. |
+| `affects` | for every other `type`, and never with `rename` | The code that the change breaks. An item is a path, written alone like `rename.from`, e.g. `pydantic_ai.Agent.run_stream`. Or it is a keyword argument of a callable: `path` and `keyword`, both required, and `when`, which is `passed` (the default) when code breaks by passing the keyword, or `omitted` when it breaks by leaving it out, as when a default changed. A path without a keyword is always written alone. |
 | `example.before`, `example.after` | yes | The smallest code that shows the change. |
 | `example.fails_with.before` | for every other `type`; optional for `rename` | How `example.before` fails on `breaks_in`: `error` is the exception, bare for a builtin such as `TypeError` and as its full path otherwise, such as `pydantic_ai.exceptions.UserError`, and the optional `message` is a part of its message. For a `behavior` change, `error` is `AssertionError`. |
 | `example.fails_with.after` | for every other `type` that has `works_since`; optional for `rename`; never without `works_since` | How `example.after` fails on the release just before `works_since`, written like `example.fails_with.before`. |
@@ -111,8 +111,8 @@ Notices are plain YAML, without anchors, aliases or tags.
 ## Changelog
 
 - **0.3** (2026-10-25):
-  - `affects` names the code that a change other than a rename breaks: paths,
-    and keyword arguments that break when they are passed or when they are left out.
+  - `affects` names the code that a change other than a rename breaks: paths, written alone,
+    and keyword arguments of a callable, as `path` and `keyword`, that break when they are passed or when they are left out.
   - `example.fails_with` says how the examples fail. Every type but `rename` needs it, with `after` when `works_since` is set,
     and `after` needs `works_since` for every type. A `behavior` change fails with `AssertionError`.
   - `restored_in` is the first release in which the old code works again,

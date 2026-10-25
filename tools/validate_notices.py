@@ -221,13 +221,6 @@ def _expected(error: ValidationError) -> str:
     if error.validator == "not":
         # The other "not" rule is the one for text: it must not match a newline.
         return "must be one line."
-    if error.validator == "dependentRequired":
-        # {"when": ["keyword"]}: the field that is there, and the field it needs.
-        rules = cast("Mapping[str, list[str]]", error.validator_value)
-        fields = cast("Mapping[str, object]", error.instance)
-        name = next(name for name in rules if name in fields)
-        needed = next(needed for needed in rules[name] if needed not in fields)
-        return f"`{name}` is only allowed together with `{needed}`."
     if error.validator == "type" and error.instance is None:
         return "has no value."
     return error.message
