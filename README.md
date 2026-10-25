@@ -7,7 +7,7 @@
 
 **An open registry of breaking changes in libraries and APIs, plus an agent that fixes your code when you upgrade.**
 
-> **Status: early.** This repository holds the notice format (v0.2), the first notices and the `breakwise` package.
+> **Status: early.** This repository holds the notice format (v0.3), the first notices and the `breakwise` package.
 > The package on PyPI shows any notice offline; finding and fixing affected code comes next. Contributions are welcome.
 
 ## The problem
@@ -43,7 +43,7 @@ AI coding agents will be able to query the registry through an MCP server.
 
 ```yaml
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
@@ -75,7 +75,7 @@ references:
 ```
 
 Every field is described in [docs/notice-format.md](docs/notice-format.md),
-and [schema/notice-0.2.schema.json](schema/notice-0.2.schema.json) defines the format for tools.
+and [schema/notice-0.3.schema.json](schema/notice-0.3.schema.json) defines the format for tools.
 
 ## Install
 
@@ -105,7 +105,7 @@ Finding the code that an upgrade breaks comes next; see the [roadmap](#roadmap).
 - [x] Notice format v0.1 and its JSON Schema
 - [x] Check every notice and run its examples on real package versions, on each pull request
 - [x] A first release on PyPI: `breakwise explain` shows any notice, offline
-- [ ] Format v0.2, the pydantic-ai V2 notices and a published index
+- [ ] The notice formats that the pydantic-ai V2 notices need, those notices and a published index
 - [ ] `breakwise scan`: report the code that an upgrade breaks
 - [ ] MCP server for AI coding agents
 - [ ] `breakwise fix`: apply tested fixes, alone or in a two-step upgrade

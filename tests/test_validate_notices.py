@@ -18,11 +18,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTICE = Path("notices/pypi/pydantic-ai/BW-2026-0001.yaml")
 TODAY = dt.date(2026, 10, 21)
 
-# The tests start from this copy of BW-2026-0001 as it was first published, in format 0.2.
+# The tests start from this copy of BW-2026-0001 as it was first published, moved to format 0.3.
 # It is fixed here, so that changes to the real notice don't break the tests.
 NOTICE_TEXT = """\
 ---
-schema_version: "0.2"
+schema_version: "0.3"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
@@ -58,6 +58,26 @@ BEFORE_BLOCK = (
 AFTER_BLOCK = (
     "    from pydantic_ai.models.openai import OpenAIChatModel\n\n"
     '    model = OpenAIChatModel("gpt-5")\n'
+)
+
+# The messages of the rules that format 0.3 added, written out to pin their exact words.
+REQUIRED_AFFECTS = (
+    "`affects` is required when `type` is not `rename`: it names the code that breaks."
+)
+REQUIRED_FAILS_WITH = (
+    "`example.fails_with` is required when `type` is not `rename`: "
+    "it says how `example.before` fails on `breaks_in`."
+)
+REQUIRED_AFTER = (
+    "`example.fails_with.after` is required when `type` is not `rename` and `works_since` "
+    "is set: it says how `example.after` fails on the release before `works_since`."
+)
+NOT_ALLOWED_AFFECTS = (
+    "`affects` is not allowed when `type` is `rename`: `rename.from` names what breaks."
+)
+NOT_ALLOWED_AFTER = (
+    "`example.fails_with.after` is only allowed with `works_since`: "
+    "it says how `example.after` fails on the release before `works_since`."
 )
 
 
@@ -275,18 +295,11 @@ def test_duplicate_keys_are_rejected_at_any_depth(repo: Path) -> None:
             id="rename without its names",
         ),
         pytest.param(
-            "type: rename",
-            'type: removal\ninstructions: "Use OpenAIChatModel instead."',
-            "schema_version:",
-            "`rename` is only allowed when `type` is `rename`.",
-            id="rename with another type",
-        ),
-        pytest.param(
             "id: BW-2026-0001",
             "id: BW-26-1",
             "id:",
             "id: 'BW-26-1' is not valid. Expected an ID like BW-2026-0001: the year it was "
-            "published, then a number of four digits or more, without extra leading zeros.",
+            "published, then a number of four to eight digits, without extra leading zeros.",
             id="bad id",
         ),
         pytest.param(
@@ -299,11 +312,12 @@ def test_duplicate_keys_are_rejected_at_any_depth(repo: Path) -> None:
         ),
         pytest.param(
             "  from: pydantic_ai.models.openai.OpenAIModel",
-            "  from: OpenAIModel",
+            "  from: pydantic_ai.models.openai.Open-AI-Model",
             "  from:",
-            "rename.from: 'OpenAIModel' is not valid. "
-            "Expected a Python import path, e.g. pydantic_ai.models.openai.OpenAIModel.",
-            id="name without its module",
+            "rename.from: 'pydantic_ai.models.openai.Open-AI-Model' is not valid. "
+            "Expected a Python name or import path, e.g. TypeError or "
+            "pydantic_ai.models.openai.OpenAIModel.",
+            id="bad name",
         ),
         pytest.param(
             "  name: pydantic-ai",
@@ -348,7 +362,9 @@ def test_every_schema_problem_is_reported(repo: Path) -> None:
     edit(repo, "type: rename", "type: removal")
     assert problems_in(repo) == [
         at(repo, "schema_version:", "'instructions' is a required property"),
+        at(repo, "schema_version:", REQUIRED_AFFECTS),
         at(repo, "schema_version:", "`rename` is only allowed when `type` is `rename`."),
+        at(repo, "example:", REQUIRED_FAILS_WITH),
     ]
 
 
@@ -366,6 +382,399 @@ def test_field_names_read_like_the_docs() -> None:
     assert vn.field_name([]) == ""
     assert vn.field_name(["example", "before"]) == "example.before"
     assert vn.field_name(["references", 1]) == "references[1]"
+
+
+# --- The fields and rules of format 0.3 ---------------------------------------
+
+# A notice of a type other than rename, with every field that format 0.3 has.
+EVERY_FIELD_TEXT = """\
+---
+schema_version: "0.3"
+id: BW-2026-0001
+status: draft
+published: "2026-10-21"
+modified: "2026-10-21"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: signature
+breaks_in: "2.0.0"
+works_since: "0.7.6"
+restored_in: "2.1.0"
+summary: Agent no longer takes result_type, and output_type takes its place.
+instructions: Pass the same value as output_type instead of result_type.
+affects:
+  - pydantic_ai.Agent.run
+  - path: pydantic_ai.Agent
+    keyword: result_type
+    when: passed
+example:
+  before: |
+    from pydantic_ai import Agent
+
+    Agent("test", result_type=str)
+  after: |
+    from pydantic_ai import Agent
+
+    Agent("test", output_type=str)
+  fails_with:
+    before:
+      error: TypeError
+      message: unexpected keyword argument 'result_type'
+    after:
+      error: pydantic_ai.exceptions.UserError
+      message: "Unknown keyword arguments: `output_type`"
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+withdrawn:
+  date: "2026-10-21"
+  reason: It was a duplicate of another notice.
+"""
+
+AFFECTS_BLOCK = (
+    "affects:\n  - pydantic_ai.Agent.run\n  - path: pydantic_ai.Agent\n"
+    "    keyword: result_type\n    when: passed\n"
+)
+FAILS_WITH_AFTER = (
+    "    after:\n      error: pydantic_ai.exceptions.UserError\n"
+    '      message: "Unknown keyword arguments: `output_type`"\n'
+)
+FAILS_WITH_BLOCK = (
+    "  fails_with:\n    before:\n      error: TypeError\n"
+    "      message: unexpected keyword argument 'result_type'\n" + FAILS_WITH_AFTER
+)
+RENAME_FAILS_WITH = "  fails_with:\n    before:\n      error: ImportError\n"
+
+
+@pytest.fixture
+def full_repo(repo: Path) -> Path:
+    """The repository with a notice that has every field of format 0.3."""
+    (repo / NOTICE).write_text(EVERY_FIELD_TEXT, encoding="utf-8")
+    return repo
+
+
+def test_a_notice_with_every_field_passes(full_repo: Path) -> None:
+    assert problems_in(full_repo) == []
+
+
+def test_a_final_newline_passes_a_pattern_but_not_the_one_line_rule() -> None:
+    # Python's $ also matches just before a final newline, so format 0.2 took "a.b\n" as a name.
+    def valid(schema_file: str, definition: str, value: str) -> bool:
+        schema = json.loads((REPO_ROOT / schema_file).read_text(encoding="utf-8"))
+        rule = {"$defs": schema["$defs"], "$ref": f"#/$defs/{definition}"}
+        return jsonschema.Draft202012Validator(rule).is_valid(value)
+
+    assert valid("schema/notice-0.2.schema.json", "dotted_name", "a.b\n")
+    assert not valid(vn.SCHEMA_FILE.as_posix(), "path", "a.b\n")
+    assert valid(vn.SCHEMA_FILE.as_posix(), "path", "a.b")
+
+
+@pytest.mark.parametrize(
+    ("fixture", "line", "field"),
+    [
+        ("full_repo", "id: BW-2026-0001", "id"),
+        ("full_repo", 'published: "2026-10-21"', "published"),
+        ("full_repo", 'modified: "2026-10-21"', "modified"),
+        ("full_repo", "  name: pydantic-ai", "package.name"),
+        ("full_repo", "    - pydantic-ai-slim", "package.aliases[0]"),
+        ("full_repo", 'breaks_in: "2.0.0"', "breaks_in"),
+        ("full_repo", 'works_since: "0.7.6"', "works_since"),
+        ("full_repo", 'restored_in: "2.1.0"', "restored_in"),
+        ("full_repo", "summary: Agent no longer takes result_type, and output_type", "summary"),
+        ("full_repo", "instructions: Pass the same value as output_type", "instructions"),
+        ("full_repo", "  - pydantic_ai.Agent.run", "affects[0]"),
+        ("full_repo", "  - path: pydantic_ai.Agent", "affects[1].path"),
+        ("full_repo", "    keyword: result_type", "affects[1].keyword"),
+        ("full_repo", "      error: TypeError", "example.fails_with.before.error"),
+        ("full_repo", "      message: unexpected keyword", "example.fails_with.before.message"),
+        ("full_repo", "      error: pydantic_ai.exceptions", "example.fails_with.after.error"),
+        ("full_repo", "  - https://pydantic.dev/docs/ai/project/changelog/", "references[0]"),
+        ("full_repo", '  date: "2026-10-21"', "withdrawn.date"),
+        ("full_repo", "  reason: It was a duplicate", "withdrawn.reason"),
+        ("repo", "  from: pydantic_ai.models.openai.OpenAIModel", "rename.from"),
+        ("repo", "  to: pydantic_ai.models.openai.OpenAIChatModel", "rename.to"),
+        ("keyword_repo", "    - pydantic_ai.Agent", "rename.keyword_of[0]"),
+        ("keyword_repo", "  from: mcp_servers", "rename.from"),
+        ("keyword_repo", "  to: toolsets", "rename.to"),
+    ],
+)
+def test_text_fields_must_be_one_line(
+    request: pytest.FixtureRequest, fixture: str, line: str, field: str
+) -> None:
+    root: Path = request.getfixturevalue(fixture)
+    # The whole line, whose value then ends in a newline, written in double quotes.
+    text = (root / NOTICE).read_text(encoding="utf-8")
+    old = next(whole for whole in text.splitlines() if whole.startswith(line))
+    head, sep, value = old.rpartition(": ") if ": " in old else old.rpartition("- ")
+    new = f"{head}{sep}{json.dumps(value.strip(chr(34)) + chr(10))}"
+    edit(root, old, new)
+    assert problems_in(root) == [at(root, new, f"{field}: must be one line.")]
+
+
+def test_an_empty_text_field_is_not_also_more_than_one_line(full_repo: Path) -> None:
+    # The one-line rule only looks at text, so an empty value gets one message.
+    edit(full_repo, "  reason: It was a duplicate of another notice.", "  reason:")
+    assert problems_in(full_repo) == [at(full_repo, "  reason:", "withdrawn.reason: has no value.")]
+
+
+@pytest.mark.parametrize(
+    ("fixture", "changes", "starts", "message"),
+    [
+        pytest.param(
+            "full_repo",
+            [(AFFECTS_BLOCK, "")],
+            "schema_version:",
+            REQUIRED_AFFECTS,
+            id="affects is required for other types",
+        ),
+        pytest.param(
+            "full_repo",
+            [(FAILS_WITH_BLOCK, "")],
+            "example:",
+            REQUIRED_FAILS_WITH,
+            id="fails_with is required for other types",
+        ),
+        pytest.param(
+            "full_repo",
+            [(FAILS_WITH_AFTER, "")],
+            "  fails_with:",
+            REQUIRED_AFTER,
+            id="fails_with.after is required with works_since",
+        ),
+        pytest.param(
+            "full_repo",
+            [('works_since: "0.7.6"\n', "")],
+            "  fails_with:",
+            NOT_ALLOWED_AFTER,
+            id="fails_with.after needs works_since",
+        ),
+        pytest.param(
+            "repo",
+            [
+                ('works_since: "0.7.6"\n', ""),
+                (AFTER_BLOCK, AFTER_BLOCK + RENAME_FAILS_WITH + "    after:\n      error: E\n"),
+            ],
+            "  fails_with:",
+            NOT_ALLOWED_AFTER,
+            id="fails_with.after needs works_since for a rename too",
+        ),
+        pytest.param(
+            "repo",
+            [("example:\n", "affects:\n  - pydantic_ai.models.openai.OpenAIModel\nexample:\n")],
+            "schema_version:",
+            NOT_ALLOWED_AFFECTS,
+            id="affects with a rename",
+        ),
+        pytest.param(
+            "full_repo",
+            [("example:\n", "rename:\n  from: a.Old\n  to: a.New\nexample:\n")],
+            "schema_version:",
+            "`rename` is only allowed when `type` is `rename`.",
+            id="rename with another type",
+        ),
+        pytest.param(
+            "full_repo",
+            [("type: signature", "type: behavior")],
+            "      error: TypeError",
+            "example.fails_with.before.error: 'TypeError' is not valid. "
+            "Expected AssertionError: the example of a behavior change fails an assert.",
+            id="behavior fails with something else than an assert",
+        ),
+        pytest.param(
+            "full_repo",
+            [(AFFECTS_BLOCK, "affects: []\n")],
+            "affects:",
+            "affects: [] should be non-empty",
+            id="empty affects",
+        ),
+        pytest.param(
+            "full_repo",
+            [("  - pydantic_ai.Agent.run\n", "  - pydantic_ai.Agent.run\n" * 2)],
+            "affects:",
+            "affects: ['pydantic_ai.Agent.run', 'pydantic_ai.Agent.run', {'path': "
+            "'pydantic_ai.Agent', 'keyword': 'result_type', 'when': 'passed'}] "
+            "has non-unique elements",
+            id="affects twice",
+        ),
+        pytest.param(
+            "full_repo",
+            [("  - pydantic_ai.Agent.run", "  - pydantic-ai.Agent.run")],
+            "  - pydantic-ai",
+            "affects[0]: 'pydantic-ai.Agent.run' is not valid. Expected a Python name or "
+            "import path, e.g. TypeError or pydantic_ai.models.openai.OpenAIModel.",
+            id="affects with a bad path",
+        ),
+        pytest.param(
+            "full_repo",
+            [("  - path: pydantic_ai.Agent\n    keyword", "  - keyword")],
+            "  - keyword",
+            "affects[1]: 'path' is a required property",
+            id="affects without its path",
+        ),
+        pytest.param(
+            "full_repo",
+            [("    when: passed\n", "    when: passed\n    since: x\n")],
+            "  - path:",
+            "affects[1]: Additional properties are not allowed ('since' was unexpected)",
+            id="affects with an unknown field",
+        ),
+        pytest.param(
+            # A path without a keyword is written alone, so each item is written one way only.
+            "full_repo",
+            [("    keyword: result_type\n    when: passed\n", "")],
+            "  - path:",
+            "affects[1]: 'keyword' is a required property",
+            id="a path in an object without a keyword",
+        ),
+        pytest.param(
+            "full_repo",
+            [("when: passed", "when: always")],
+            "    when:",
+            "affects[1].when: 'always' is not one of ['passed', 'omitted']",
+            id="unknown when",
+        ),
+        pytest.param(
+            "full_repo",
+            [("    before:\n      error: TypeError\n", "    before:\n")],
+            "    before:",
+            "example.fails_with.before: 'error' is a required property",
+            id="failure without its error",
+        ),
+        pytest.param(
+            "full_repo",
+            [(FAILS_WITH_BLOCK.removeprefix("  fails_with:\n").removesuffix(FAILS_WITH_AFTER), "")],
+            "  fails_with:",
+            "example.fails_with: 'before' is a required property",
+            id="fails_with without before",
+        ),
+        pytest.param(
+            "full_repo",
+            [("      error: TypeError", "      error: Type Error")],
+            "      error: Type",
+            "example.fails_with.before.error: 'Type Error' is not valid. Expected a Python name "
+            "or import path, e.g. TypeError or pydantic_ai.models.openai.OpenAIModel.",
+            id="bad error",
+        ),
+        pytest.param(
+            "full_repo",
+            [("      message: unexpected keyword argument 'result_type'", '      message: ""')],
+            '      message: ""',
+            "example.fails_with.before.message: '' should be non-empty",
+            id="empty message",
+        ),
+        pytest.param(
+            "full_repo",
+            [("      error: TypeError\n", "      error: TypeError\n      code: E1\n")],
+            "    before:",
+            "example.fails_with.before: Additional properties are not allowed "
+            "('code' was unexpected)",
+            id="failure with an unknown field",
+        ),
+        pytest.param(
+            "full_repo",
+            [("  fails_with:\n", "  fails_with:\n    during:\n      error: E\n")],
+            "  fails_with:",
+            "example.fails_with: Additional properties are not allowed ('during' was unexpected)",
+            id="fails_with with an unknown field",
+        ),
+        pytest.param(
+            "full_repo",
+            [('restored_in: "2.1.0"', "restored_in: soon")],
+            "restored_in:",
+            "restored_in: 'soon' is not valid. "
+            "Expected a PEP 440 public version, e.g. 2.0.0, 1.0.0rc1, 2.1.0.post1 or 1!2.0.",
+            id="bad restored_in",
+        ),
+        pytest.param(
+            "full_repo",
+            [("  reason: It was a duplicate of another notice.\n", "")],
+            "withdrawn:",
+            "withdrawn: 'reason' is a required property",
+            id="withdrawn without a reason",
+        ),
+        pytest.param(
+            "full_repo",
+            [("It was a duplicate of another notice.", "Duplicate")],
+            "  reason:",
+            "withdrawn.reason: 'Duplicate' is too short",
+            id="withdrawn with a short reason",
+        ),
+        pytest.param(
+            "full_repo",
+            [('  date: "2026-10-21"', '  date: "2026-10-21"\n  by: someone')],
+            "withdrawn:",
+            "withdrawn: Additional properties are not allowed ('by' was unexpected)",
+            id="withdrawn with an unknown field",
+        ),
+    ],
+)
+def test_rules_of_format_0_3(
+    request: pytest.FixtureRequest,
+    fixture: str,
+    changes: list[tuple[str, str]],
+    starts: str,
+    message: str,
+) -> None:
+    root: Path = request.getfixturevalue(fixture)
+    for old, new in changes:
+        edit(root, old, new)
+    assert problems_in(root) == [at(root, starts, message)]
+
+
+@pytest.mark.parametrize(
+    ("fixture", "changes"),
+    [
+        pytest.param("repo", [(AFTER_BLOCK, AFTER_BLOCK + RENAME_FAILS_WITH)], id="rename with"),
+        pytest.param(
+            "repo",
+            [(AFTER_BLOCK, AFTER_BLOCK + RENAME_FAILS_WITH + "    after:\n      error: E\n")],
+            id="rename with fails_with.after and works_since",
+        ),
+        pytest.param(
+            "full_repo",
+            [('works_since: "0.7.6"\n', ""), (FAILS_WITH_AFTER, "")],
+            id="no works_since and no fails_with.after",
+        ),
+        pytest.param(
+            "full_repo",
+            [("type: signature", "type: behavior"), ("error: TypeError", "error: AssertionError")],
+            id="behavior that fails an assert",
+        ),
+        pytest.param(
+            "full_repo", [("error: TypeError", "error: AssertionError")], id="assert for others"
+        ),
+        pytest.param("full_repo", [("when: passed", "when: omitted")], id="when omitted"),
+        pytest.param("full_repo", [("    when: passed\n", "")], id="keyword without when"),
+        pytest.param(
+            "full_repo", [("  - pydantic_ai.Agent.run", "  - pydantic_ai")], id="one-part affects"
+        ),
+        pytest.param(
+            "full_repo",
+            [("      message: unexpected keyword argument 'result_type'\n", "")],
+            id="failure without its message",
+        ),
+        pytest.param("full_repo", [('breaks_in: "2.0.0"', 'breaks_in: "1!2.0"')], id="epoch"),
+        pytest.param(
+            "repo",
+            [
+                ("  from: pydantic_ai.models.openai.OpenAIModel", "  from: pydantic_ai_v1"),
+                ("  to: pydantic_ai.models.openai.OpenAIChatModel", "  to: pydantic_ai"),
+                (BEFORE_BLOCK, '    import pydantic_ai_v1\n\n    pydantic_ai_v1.Agent("test")\n'),
+                (AFTER_BLOCK, '    import pydantic_ai\n\n    pydantic_ai.Agent("test")\n'),
+            ],
+            id="one-part rename",
+        ),
+    ],
+)
+def test_what_format_0_3_allows(
+    request: pytest.FixtureRequest, fixture: str, changes: list[tuple[str, str]]
+) -> None:
+    root: Path = request.getfixturevalue(fixture)
+    for old, new in changes:
+        edit(root, old, new)
+    assert problems_in(root) == []
 
 
 # --- Rules beyond the schema --------------------------------------------------
@@ -835,18 +1244,25 @@ def renumber(repo: Path, notice_id: str) -> Path:
     return target.relative_to(repo)
 
 
-@pytest.mark.parametrize("notice_id", ["BW-2026-0001", "BW-2026-9999", "BW-2026-10000"])
-def test_ids_have_four_digits_or_more(repo: Path, notice_id: str) -> None:
+@pytest.mark.parametrize(
+    "notice_id", ["BW-2026-0001", "BW-2026-9999", "BW-2026-10000", "BW-2026-12345678"]
+)
+def test_ids_have_four_to_eight_digits(repo: Path, notice_id: str) -> None:
     renumber(repo, notice_id)
     assert problems_in(repo) == []
 
 
-@pytest.mark.parametrize("notice_id", ["BW-2026-0000", "BW-2026-00001", "BW-2026-01000"])
-def test_ids_have_no_extra_leading_zeros(repo: Path, notice_id: str) -> None:
+@pytest.mark.parametrize(
+    "notice_id",
+    ["BW-2026-0000", "BW-2026-00001", "BW-2026-01000", "BW-2026-123456789", "BW-2026-012345678"],
+)
+def test_ids_have_no_more_than_eight_digits_and_no_extra_leading_zeros(
+    repo: Path, notice_id: str
+) -> None:
     rel = renumber(repo, notice_id)
     message = (
         f"id: {notice_id!r} is not valid. Expected an ID like BW-2026-0001: the year it was "
-        "published, then a number of four digits or more, without extra leading zeros."
+        "published, then a number of four to eight digits, without extra leading zeros."
     )
     assert problems_in(repo) == [f"{rel.as_posix()}:3: {message}"]
 
@@ -976,7 +1392,7 @@ def test_keywords_of_several_callables_and_of_methods(keyword_repo: Path) -> Non
             "    - Agent\n",
             "    - Agent",
             "rename.keyword_of[0]: 'Agent' is not valid. "
-            "Expected a Python import path, e.g. pydantic_ai.models.openai.OpenAIModel.",
+            "Expected a Python import path of two parts or more, e.g. pydantic_ai.Agent.",
             id="callable without its module",
         ),
     ],
@@ -1200,7 +1616,7 @@ def test_readme_example_must_match_the_notice(repo: Path) -> None:
 
 def test_readme_example_must_be_a_real_notice(repo: Path) -> None:
     readme = repo / vn.README_FILE
-    block = '```yaml\nschema_version: "0.2"\nid: BW-2026-9999\n```\n'
+    block = '```yaml\nschema_version: "0.3"\nid: BW-2026-9999\n```\n'
     readme.write_text(f"\n{block}", encoding="utf-8")
     assert problems_in(repo) == [
         "README.md:2: The example shows BW-2026-9999, but there is no notice with that ID."
@@ -1227,7 +1643,7 @@ def test_readme_example_is_compared_with_an_invalid_notice_too(repo: Path) -> No
 
 @pytest.mark.parametrize(
     "block",
-    ['schema_version: "0.2"\nid: [BW\n', 'schema_version: "0.2"\npublished: 2026-02-30\n'],
+    ['schema_version: "0.3"\nid: [BW\n', 'schema_version: "0.3"\npublished: 2026-02-30\n'],
 )
 def test_readme_example_must_be_valid_yaml(repo: Path, block: str) -> None:
     (repo / vn.README_FILE).write_text(f"```yaml\n{block}```\n", encoding="utf-8")

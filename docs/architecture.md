@@ -47,7 +47,7 @@ flowchart LR
 
 | Part | Role | Status |
 | --- | --- | --- |
-| Notice format | Describes one breaking change, with tested examples | Built (v0.2) |
+| Notice format | Describes one breaking change, with tested examples | Built (v0.3) |
 | Validator | Checks every notice without running code | Built |
 | Verifier | Runs every example on real releases from PyPI | Built |
 | Index | Publishes the registry as static JSON for clients | Next |
@@ -68,7 +68,7 @@ flowchart LR
 - Each format version has its own JSON Schema in `schema/`. A released schema is never edited: changes go into the next version, with an entry in the changelog.
 - The tools accept only the latest format version. The pull request that releases a version moves every notice to it.
 - `breaks_in` is the first release in which the old code fails, and `works_since` the first in which the new code runs, pre-releases included. A notice leaves out `works_since` when that release is unknown, and tools then treat its fix as one that can't come before the upgrade.
-- IDs are permanent. A wrong notice is corrected and gets a new `modified` date. A format version after v0.2 will add a `withdrawn` field for a notice that should never have existed, so that its ID keeps a meaning.
+- IDs are permanent. A wrong notice is corrected and gets a new `modified` date. From format 0.3, a notice that should never have existed gets a `withdrawn` field, so that its ID keeps a meaning.
 
 ### Checks (Built)
 
@@ -95,7 +95,7 @@ Clients never read YAML from git. On every push to `main`, CI builds an index an
 The engine is the `breakwise` package in `src/breakwise/` (Apache-2.0), published to PyPI with Trusted Publishing and attestations. Every interface is a thin layer over it. It works in five steps:
 
 1. **Project.** Find the packages the project uses and their versions. The sources, from most to least exact, are lock files (`pylock.toml` from PEP 751, `uv.lock`, `poetry.lock` and `pdm.lock`), pinned requirements files, the installed environment, and the ranges in `pyproject.toml`. Each version remembers its source, so reports can say how sure they are. An alias counts as the package it ships, so a project on `pydantic-ai-slim` gets the notices for `pydantic-ai`. When only a range is known, the engine takes the lowest version that the range allows, and the report says so.
-2. **Plan.** Decide the target versions: given by the user, read from the other side of a pull request (the lock files of its base and its head), or the latest release. Pre-releases are targets only when the user asks for one or the project already uses one. A notice applies when `current < breaks_in <= target` in PEP 440 order. If `works_since <= current`, its fix can be applied before upgrading. A notice without `works_since` waits for the upgrade.
+2. **Plan.** Decide the target versions: given by the user, read from the other side of a pull request (the lock files of its base and its head), or the latest release. Pre-releases are targets only when the user asks for one or the project already uses one. A notice applies when `current < breaks_in <= target < restored_in` in PEP 440 order, and a notice without `restored_in` has no upper limit. If `works_since <= current`, its fix can be applied before upgrading. A notice without `works_since` waits for the upgrade.
 3. **Analyze.** Find the code that each applicable notice affects:
    - A text pre-filter skips files that never mention the top-level module of the notice's names, such as `pydantic_ai`, so that large projects stay fast.
    - LibCST parses the remaining files without losing their formatting, and its qualified-name metadata resolves imports and aliases, such as `from pydantic_ai.models.openai import OpenAIModel as Model`.
@@ -216,7 +216,7 @@ When the engine starts, the notice model that the validator and the verifier sha
 | Phase | Delivers | Done when |
 | --- | --- | --- |
 | 0. Foundation | Format v0.1, the validator, the verifier and CI | Done: BW-2026-0001 passes every check |
-| 1. Registry | A first release on PyPI with `breakwise explain`, then format v0.2, the pydantic-ai V2 notices (#5) and the published index | `pip install breakwise` gives `breakwise explain`, and the index lists every pydantic-ai V2 notice |
+| 1. Registry | A first release on PyPI with `breakwise explain`, then the notice formats that the pydantic-ai V2 notices need, the pydantic-ai V2 notices (#5) and the published index | `pip install breakwise` gives `breakwise explain`, and the index lists every pydantic-ai V2 notice |
 | 2. Scan | The engine's project, plan and analysis steps, and `breakwise scan` (#6) | On a sample project, `scan` reports every line that pydantic-ai 2.0 breaks |
 | 3. MCP | The MCP server with read-only tools | An agent finds and explains the notices for an upgrade |
 | 4. Fix | Rename and keyword fixes, `breakwise fix`, `plan_fixes`, and checking the index attestation | Every notice's fix turns `example.before` into `example.after` |

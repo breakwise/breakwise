@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/breakwise/breakwise/main/schema/notice-0.3.schema.json",
+  "title": "Breakwise notice",
+  "description": "One breaking change in one package. Format version 0.3. See docs/notice-format.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "status",
+    "published",
+    "package",
+    "type",
+    "breaks_in",
+    "summary",
+    "example",
+    "references"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.3"
+    },
+    "id": {
+      "description": "an ID like BW-2026-0001: the year it was published, then a number of four to eight digits, without extra leading zeros.",
+      "$ref": "#/$defs/line",
+      "pattern": "^BW-[0-9]{4}-(?!0000$)([0-9]{4}|[1-9][0-9]{4,7})$"
+    },
+    "status": {
+      "enum": ["draft", "verified"]
+    },
+    "published": {
+      "$ref": "#/$defs/date"
+    },
+    "modified": {
+      "$ref": "#/$defs/date"
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ecosystem", "name"],
+      "properties": {
+        "ecosystem": {
+          "enum": ["PyPI"]
+        },
+        "name": {
+          "$ref": "#/$defs/package_name"
+        },
+        "aliases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/package_name"
+          }
+        }
+      }
+    },
+    "type": {
+      "enum": ["rename", "removal", "signature", "behavior"]
+    },
+    "breaks_in": {
+      "$ref": "#/$defs/version"
+    },
+    "works_since": {
+      "$ref": "#/$defs/version"
+    },
+    "restored_in": {
+      "description": "the first release in which the old code works again.",
+      "$ref": "#/$defs/version"
+    },
+    "summary": {
+      "$ref": "#/$defs/line",
+      "minLength": 10,
+      "maxLength": 200
+    },
+    "rename": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "keyword_of": {
+          "description": "the callables whose keyword argument was renamed.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/dotted_name"
+          }
+        }
+      },
+      "if": {
+        "required": ["keyword_of"]
+      },
+      "then": {
+        "properties": {
+          "from": {"$ref": "#/$defs/keyword"},
+          "to": {"$ref": "#/$defs/keyword"}
+        }
+      },
+      "else": {
+        "properties": {
+          "from": {"$ref": "#/$defs/path"},
+          "to": {"$ref": "#/$defs/path"}
+        }
+      }
+    },
+    "instructions": {
+      "$ref": "#/$defs/line",
+      "minLength": 10
+    },
+    "affects": {
+      "description": "the code that the change breaks: a path, written alone, or a callable with a keyword argument that breaks when it is passed or omitted.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "if": {
+          "type": "string"
+        },
+        "then": {
+          "$ref": "#/$defs/path"
+        },
+        "else": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "keyword"],
+          "properties": {
+            "path": {"$ref": "#/$defs/path"},
+            "keyword": {"$ref": "#/$defs/keyword"},
+            "when": {
+              "enum": ["passed", "omitted"],
+              "default": "passed"
+            }
+          }
+        }
+      }
+    },
+    "example": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": {
+          "type": "string",
+          "minLength": 1
+        },
+        "after": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fails_with": {
+          "description": "how example.before fails on breaks_in, and how example.after fails on the release before works_since.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["before"],
+          "properties": {
+            "before": {"$ref": "#/$defs/failure"},
+            "after": {"$ref": "#/$defs/failure"}
+          }
+        }
+      }
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "description": "an https:// link.",
+        "$ref": "#/$defs/line",
+        "pattern": "^https://[^\\s]+$"
+      }
+    },
+    "withdrawn": {
+      "description": "when and why the notice was withdrawn. Its ID stays taken.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "reason"],
+      "properties": {
+        "date": {"$ref": "#/$defs/date"},
+        "reason": {
+          "$ref": "#/$defs/line",
+          "minLength": 10
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"type": {"const": "rename"}},
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["rename"],
+        "not": {"required": ["instructions"]}
+      },
+      "else": {
+        "required": ["instructions"],
+        "not": {"required": ["rename"]}
+      }
+    },
+    {
+      "if": {
+        "properties": {"type": {"const": "rename"}},
+        "required": ["type"]
+      },
+      "then": {
+        "not": {"required": ["affects"]}
+      },
+      "else": {
+        "required": ["affects"],
+        "properties": {
+          "example": {"required": ["fails_with"]}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"type": {"enum": ["removal", "signature", "behavior"]}},
+        "required": ["type", "works_since"]
+      },
+      "then": {
+        "properties": {
+          "example": {
+            "properties": {
+              "fails_with": {"required": ["after"]}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {"required": ["works_since"]}
+      },
+      "then": {
+        "properties": {
+          "example": {
+            "properties": {
+              "fails_with": {"not": {"required": ["after"]}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"type": {"const": "behavior"}},
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "example": {
+            "properties": {
+              "fails_with": {
+                "properties": {
+                  "before": {
+                    "properties": {
+                      "error": {
+                        "description": "AssertionError: the example of a behavior change fails an assert.",
+                        "const": "AssertionError"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "line": {
+      "description": "text without a newline. The inner type keeps other values, such as an empty one, out of this rule.",
+      "type": "string",
+      "not": {"type": "string", "pattern": "\\n"}
+    },
+    "date": {
+      "description": "a date written as \"YYYY-MM-DD\".",
+      "$ref": "#/$defs/line",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+    },
+    "package_name": {
+      "description": "a normalized PyPI name: lowercase letters and digits, words joined by single hyphens.",
+      "$ref": "#/$defs/line",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "version": {
+      "description": "a PEP 440 public version, e.g. 2.0.0, 1.0.0rc1, 2.1.0.post1 or 1!2.0.",
+      "$ref": "#/$defs/line",
+      "pattern": "^([0-9]+!)?[0-9]+(\\.[0-9]+)*((a|b|rc)[0-9]+)?(\\.post[0-9]+)?(\\.dev[0-9]+)?$"
+    },
+    "path": {
+      "description": "a Python name or import path, e.g. TypeError or pydantic_ai.models.openai.OpenAIModel.",
+      "$ref": "#/$defs/line",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "dotted_name": {
+      "description": "a Python import path of two parts or more, e.g. pydantic_ai.Agent.",
+      "$ref": "#/$defs/line",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"
+    },
+    "keyword": {
+      "description": "a keyword argument name, e.g. toolsets.",
+      "$ref": "#/$defs/line",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": {"$ref": "#/$defs/path"},
+        "message": {
+          "description": "a part of the error message.",
+          "$ref": "#/$defs/line",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
