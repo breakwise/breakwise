@@ -14,12 +14,14 @@ checks that:
   no anchors, aliases or tags, no duplicate keys, and no unquoted value that
   YAML reads as a number, date or boolean, so that a version such as "2.10"
   keeps every digit,
-- it matches the JSON Schema in ``schema/``,
+- it matches the JSON Schema in ``schema/``, and it isn't nested too deeply to read,
 - it is stored at ``notices/<ecosystem>/<package>/<id>.yaml`` and its ID is unique,
-- ``package.aliases`` does not repeat ``package.name``,
+- ``package.aliases`` does not repeat ``package.name``. Across the registry, an
+  alias belongs to one package, and a package with notices of its own isn't an alias,
 - its dates are real dates and not in the future, the year in its ID is the
-  year it was published, and ``modified`` is not before ``published``,
-- ``works_since`` is not later than ``breaks_in``,
+  year it was published, and neither ``modified`` nor ``withdrawn.date`` is before
+  ``published``,
+- ``works_since`` is not later than ``breaks_in``, and ``restored_in`` is later than it,
 - its example code is valid Python, and a rename's examples use the old name
   before the change and only the new name after it. Imports, names and
   attributes count as uses; comments, strings and keyword arguments do not,
@@ -28,7 +30,12 @@ checks that:
   callables, and ``example.after`` passes the new keyword and not the old one,
 - a rename's ``example.after`` is ``example.before`` with the rename applied, and
   nothing else, when the rename stays in one module or renames a keyword
-  argument. A move to another module is left for the engine to check.
+  argument. A move to another module is left for the engine to check,
+- for every other type, ``example.before`` uses each item of ``affects``: a path
+  by its full path or through an import of it, and a keyword argument passed to
+  its callable, or a call without it when ``when`` is ``omitted``. No two items
+  say the same, where a missing ``when`` counts as ``passed``,
+- the ``example.before`` of a ``behavior`` change ends with an ``assert``.
 
 It also checks that every notice shown in ``README.md`` matches its file exactly.
 
@@ -71,6 +78,9 @@ README_YAML_BLOCK = re.compile(r"^```ya?ml\n(.*?)^```$", re.MULTILINE | re.DOTAL
 # written without quotes, e.g. 2.10, which YAML reads as the number 2.1.
 # Empty values are left to the schema, which says that they are missing.
 TEXT_TAGS = frozenset({"tag:yaml.org,2002:str", "tag:yaml.org,2002:null"})
+
+# PyYAML reads nested values by recursion, so YAML nested hundreds of levels raises RecursionError.
+TOO_DEEP = "The notice is nested too deeply to read."
 
 # What the schema's "not" rules forbid, by the path of the field they name.
 NOT_ALLOWED = {
@@ -450,8 +460,16 @@ def read_notice(path: Path, rel: Path, validator: Draft202012Validator) -> Notic
     """Read a notice file and check it against the schema.
 
     ``rel`` is the path shown in problems. Raise InvalidNoticeError with the
-    problems found if the file is not plain YAML or does not match the schema.
+    problems found if the file is not plain YAML, is nested too deeply to read,
+    or does not match the schema.
     """
+    try:
+        return _read_valid_notice(path, rel, validator)
+    except RecursionError as error:
+        raise InvalidNoticeError([Problem(rel, 1, TOO_DEEP)]) from error
+
+
+def _read_valid_notice(path: Path, rel: Path, validator: Draft202012Validator) -> Notice:
     tree = _read_tree(path, rel)
     # Checked before the tree becomes data: YAML crashes on unquoted dates such as 2026-02-30.
     problems = [*_values_not_written_as_text(rel, tree), *_duplicate_keys(rel, tree)]
@@ -554,18 +572,22 @@ def check_notice(
     validator: Draft202012Validator,
     seen_ids: dict[str, Path],
     today: dt.date,
-) -> list[Problem]:
-    """Check one notice file. Add its ID to ``seen_ids`` if it matches the schema."""
+) -> tuple[list[Problem], Notice | None]:
+    """Check one notice file. Return its problems, and the notice if it matches the schema.
+
+    A notice that matches the schema also adds its ID to ``seen_ids``.
+    """
     try:
         notice = read_notice(path, path.relative_to(root), validator)
     except InvalidNoticeError as error:
-        return error.problems
+        return error.problems, None
 
     problems = [
         *_check_location(notice),
         *_check_dates(notice, today),
         *_check_versions(notice),
         *_check_keyword_names(notice),
+        *_check_repeated_affects(notice),
         *_check_examples(notice),
     ]
     notice_id: str = notice.data["id"]
@@ -574,7 +596,7 @@ def check_notice(
         problems.append(notice.problem("id", f"ID {notice_id} is already used by {used_by}."))
     else:
         seen_ids[notice_id] = notice.rel
-    return sorted(problems)
+    return sorted(problems), notice
 
 
 def _check_location(notice: Notice) -> Iterator[Problem]:
@@ -592,27 +614,42 @@ def _check_location(notice: Notice) -> Iterator[Problem]:
 
 
 def _check_dates(notice: Notice, today: dt.date) -> Iterator[Problem]:
-    dates: dict[str, dt.date] = {}
-    for field in ("published", "modified"):
-        if field in notice.data:
-            try:
-                dates[field] = dt.date.fromisoformat(notice.data[field])
-            except ValueError:
-                yield notice.problem(field, f"{field}: {notice.data[field]!r} is not a real date.")
+    dates, problems = _real_dates(notice)
+    yield from problems
     for field, date in dates.items():
         # One day of margin, because it is already tomorrow in some time zones.
         if date > today + dt.timedelta(days=1):
             yield notice.problem(field, f"{field}: {date} is in the future.")
 
-    published, modified = dates.get("published"), dates.get("modified")
+    published = dates.get("published")
     if published is None:
         return
     notice_id = notice.data["id"]
     if int(notice_id.split("-")[1]) != published.year:
         message = f"The year in {notice_id} must be the year it was published ({published.year})."
         yield notice.problem("id", message)
-    if modified is not None and modified < published:
-        yield notice.problem("modified", "modified must not be before published.")
+    for field in ("modified", "withdrawn.date"):
+        if field in dates and dates[field] < published:
+            yield notice.problem(field, f"{field} must not be before published.")
+
+
+def _real_dates(notice: Notice) -> tuple[dict[str, dt.date], list[Problem]]:
+    """The dates of a notice by their fields, and a problem for each one that isn't real."""
+    written = {
+        "published": notice.data["published"],
+        "modified": notice.data.get("modified"),
+        "withdrawn.date": notice.data.get("withdrawn", {}).get("date"),
+    }
+    dates: dict[str, dt.date] = {}
+    problems = []
+    for field, value in written.items():
+        if value is None:
+            continue
+        try:
+            dates[field] = dt.date.fromisoformat(value)
+        except ValueError:
+            problems.append(notice.problem(field, f"{field}: {value!r} is not a real date."))
+    return dates, problems
 
 
 def _check_versions(notice: Notice) -> Iterator[Problem]:
@@ -620,6 +657,10 @@ def _check_versions(notice: Notice) -> Iterator[Problem]:
     if works_since is not None and Version(works_since) > Version(breaks_in):
         message = f"works_since ({works_since}) must not be later than breaks_in ({breaks_in})."
         yield notice.problem("works_since", message)
+    restored_in = notice.data.get("restored_in")
+    if restored_in is not None and Version(restored_in) <= Version(breaks_in):
+        message = f"restored_in ({restored_in}) must be later than breaks_in ({breaks_in})."
+        yield notice.problem("restored_in", message)
 
 
 def _check_keyword_names(notice: Notice) -> Iterator[Problem]:
@@ -633,6 +674,48 @@ def _check_keyword_names(notice: Notice) -> Iterator[Problem]:
             yield notice.problem(f"rename.{field}", message)
 
 
+# An item of affects as (path, keyword, when): (path, None, None) for a path alone.
+AffectsItem = tuple[str, str | None, str | None]
+
+
+def _check_repeated_affects(notice: Notice) -> Iterator[Problem]:
+    """No two items of ``affects`` say the same, where a missing ``when`` counts as ``passed``.
+
+    The schema already rejects exact copies.
+    """
+    items: list[AffectsItem] = [
+        (item, None, None)
+        if isinstance(item, str)
+        else (item["path"], item["keyword"], item.get("when", "passed"))
+        for item in notice.data.get("affects", [])
+    ]
+    for (first, one), (second, other) in itertools.combinations(enumerate(items), 2):
+        found = _repeated(first, one, second, other)
+        if found is not None:
+            index, message = found
+            yield Problem(notice.rel, line_of(notice.tree, ["affects", index]), message)
+
+
+def _repeated(
+    first: int, one: AffectsItem, second: int, other: AffectsItem
+) -> tuple[int, str] | None:
+    """How two items repeat each other, as the index to report and a message, or None."""
+    path, keyword_name, _ = one
+    if path != other[0]:
+        return None
+    if one == other:
+        return second, f"affects[{second}] says the same as affects[{first}]."
+    if keyword_name is None or other[1] is None:
+        alone, covered = (first, second) if keyword_name is None else (second, first)
+        return covered, f"affects[{covered}] is already covered by affects[{alone}], {path}."
+    if keyword_name == other[1]:
+        return second, (
+            f"affects[{first}] and affects[{second}] say that {path} breaks both with and "
+            f"without {keyword_name}=, so write {path} alone."
+        )
+    return None
+
+
 def _check_examples(notice: Notice) -> Iterator[Problem]:
     valid = True
     for which in ("before", "after"):
@@ -643,8 +726,45 @@ def _check_examples(notice: Notice) -> Iterator[Problem]:
             line = _code_line(notice.tree, which, error.lineno or 1)
             message = f"example.{which} is not valid Python: {error.msg}"
             yield Problem(notice.rel, line, message)
-    if valid and notice.data["type"] == "rename":
+    if not valid:
+        return
+    if notice.data["type"] == "rename":
         yield from _check_rename(notice)
+        return
+    yield from _check_affects(notice)
+    if notice.data["type"] == "behavior":
+        yield from _check_assert(notice)
+
+
+def _check_affects(notice: Notice) -> Iterator[Problem]:
+    """``example.before`` uses each item of ``affects`` as the item says."""
+    before = notice.data["example"]["before"]
+    for index, item in enumerate(notice.data["affects"]):
+        if isinstance(item, str):
+            if not _uses_path(before, item):
+                message = (
+                    f"example.before must use affects[{index}], {item}, "
+                    "by its full path or through an import of it."
+                )
+                yield notice.problem("example.before", message)
+            continue
+        path, name = item["path"], item["keyword"]
+        called = {path.rpartition(".")[2]}
+        if item.get("when", "passed") == "passed":
+            if name not in passed_keywords(before, called):
+                message = f"example.before must pass {name}= to {path}, as affects[{index}] says."
+                yield notice.problem("example.before", message)
+        elif not calls_without(before, called, name):
+            message = f"example.before must call {path} without {name}=, as affects[{index}] says."
+            yield notice.problem("example.before", message)
+
+
+def _check_assert(notice: Notice) -> Iterator[Problem]:
+    """The ``example.before`` of a behavior change ends by asserting the old behavior."""
+    body = ast.parse(notice.data["example"]["before"]).body
+    if not body or not isinstance(body[-1], ast.Assert):
+        message = "example.before of a behavior change must end with an assert on the old behavior."
+        yield notice.problem("example.before", message)
 
 
 def _code_line(tree: yaml.Node, which: str, lineno: int) -> int:
@@ -761,6 +881,20 @@ def passed_keywords(code: str, callables: Collection[str]) -> set[str]:
     return {name for name, _ in keyword_uses(code, callables)}
 
 
+def calls_without(code: str, callables: Collection[str], name: str) -> bool:
+    """Whether code calls one of the named callables without the keyword argument ``name``.
+
+    A call matches by the last part of its name, as in :func:`keyword_uses`. A call
+    with ``**`` may pass the keyword, so it doesn't count.
+    """
+    return any(
+        isinstance(node, ast.Call)
+        and _called_name(node.func) in callables
+        and all(argument.arg not in {name, None} for argument in node.keywords)
+        for node in ast.walk(ast.parse(code))
+    )
+
+
 def _called_name(function: ast.expr) -> str | None:
     """``f`` for ``f()``, ``run`` for ``agent.run()``, and None for a call such as ``f()()``."""
     if isinstance(function, ast.Name):
@@ -785,6 +919,10 @@ def check_readme(root: Path, notices: Mapping[str, Path]) -> list[Problem]:
         line = text.count("\n", 0, match.start()) + 1
         try:
             shown = yaml.safe_load(block)
+        except RecursionError:
+            if "schema_version:" in block:
+                problems.append(Problem(README_FILE, line, TOO_DEEP))
+            continue
         except (yaml.YAMLError, ValueError):
             # ValueError: YAML fails this way on unquoted dates that do not exist.
             if "schema_version:" in block:
@@ -821,6 +959,8 @@ def validate(root: Path, today: dt.date | None = None) -> tuple[list[Problem], i
     problems: list[Problem] = []
     seen_ids: dict[str, Path] = {}
     files_by_name: dict[str, Path] = {}
+    notices: list[Notice] = []
+    folders: set[Path] = set()
     count = 0
     for path in registry_files(root):
         if path.suffix == ".md":
@@ -831,10 +971,48 @@ def validate(root: Path, today: dt.date | None = None) -> tuple[list[Problem], i
             continue
         count += 1
         files_by_name.setdefault(path.stem, path.relative_to(root))
-        problems += check_notice(root, path, validator, seen_ids, today)
+        folders.add(path.relative_to(root).parent)
+        found, notice = check_notice(root, path, validator, seen_ids, today)
+        problems += found
+        if notice is not None:
+            notices.append(notice)
+    problems += check_aliases(notices, folders)
     # A notice that cannot be read is found by its file name, which must be its ID.
     problems += check_readme(root, {**files_by_name, **seen_ids})
     return problems, count
+
+
+def check_aliases(notices: Sequence[Notice], packages: Collection[Path]) -> list[Problem]:
+    """An alias belongs to one package, and a package with notices of its own isn't an alias.
+
+    ``packages`` holds the folders that have notices, such as ``notices/pypi/pydantic-ai``.
+    """
+    owners: dict[tuple[str, str], dict[str, Path]] = {}
+    for notice in notices:
+        package = notice.data["package"]
+        for alias in package.get("aliases", []):
+            key = (package["ecosystem"], alias)
+            owners.setdefault(key, {}).setdefault(package["name"], notice.rel)
+    problems = []
+    for notice in notices:
+        package = notice.data["package"]
+        folder = NOTICES_DIR / package["ecosystem"].lower()
+        for index, alias in enumerate(package.get("aliases", [])):
+            line = line_of(notice.tree, ["package", "aliases", index])
+            for other, rel in owners[package["ecosystem"], alias].items():
+                if other != package["name"]:
+                    message = (
+                        f"package.aliases: {alias} is also an alias of {other} "
+                        f"({rel.as_posix()}). An alias belongs to one package."
+                    )
+                    problems.append(Problem(notice.rel, line, message))
+            if alias != package["name"] and folder / alias in packages:
+                message = (
+                    f"package.aliases: {alias} has its own notices in "
+                    f"{(folder / alias).as_posix()}/, so it can't be an alias."
+                )
+                problems.append(Problem(notice.rel, line, message))
+    return problems
 
 
 def main(argv: Sequence[str] | None = None) -> int:

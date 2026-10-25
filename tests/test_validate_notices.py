@@ -406,7 +406,7 @@ restored_in: "2.1.0"
 summary: Agent no longer takes result_type, and output_type takes its place.
 instructions: Pass the same value as output_type instead of result_type.
 affects:
-  - pydantic_ai.Agent.run
+  - pydantic_ai.Agent.run_sync
   - path: pydantic_ai.Agent
     keyword: result_type
     when: passed
@@ -414,11 +414,11 @@ example:
   before: |
     from pydantic_ai import Agent
 
-    Agent("test", result_type=str)
+    Agent("test", result_type=str).run_sync("hi")
   after: |
     from pydantic_ai import Agent
 
-    Agent("test", output_type=str)
+    Agent("test", output_type=str).run_sync("hi")
   fails_with:
     before:
       error: TypeError
@@ -434,7 +434,7 @@ withdrawn:
 """
 
 AFFECTS_BLOCK = (
-    "affects:\n  - pydantic_ai.Agent.run\n  - path: pydantic_ai.Agent\n"
+    "affects:\n  - pydantic_ai.Agent.run_sync\n  - path: pydantic_ai.Agent\n"
     "    keyword: result_type\n    when: passed\n"
 )
 FAILS_WITH_AFTER = (
@@ -446,6 +446,10 @@ FAILS_WITH_BLOCK = (
     "      message: unexpected keyword argument 'result_type'\n" + FAILS_WITH_AFTER
 )
 RENAME_FAILS_WITH = "  fails_with:\n    before:\n      error: ImportError\n"
+BEFORE_RUN = '    Agent("test", result_type=str).run_sync("hi")\n'
+BEFORE_RUN_ASSERTED = (
+    '    result = Agent("test", result_type=str).run_sync("hi")\n    assert result.output == "hi"\n'
+)
 
 
 @pytest.fixture
@@ -484,7 +488,7 @@ def test_a_final_newline_passes_a_pattern_but_not_the_one_line_rule() -> None:
         ("full_repo", 'restored_in: "2.1.0"', "restored_in"),
         ("full_repo", "summary: Agent no longer takes result_type, and output_type", "summary"),
         ("full_repo", "instructions: Pass the same value as output_type", "instructions"),
-        ("full_repo", "  - pydantic_ai.Agent.run", "affects[0]"),
+        ("full_repo", "  - pydantic_ai.Agent.run_sync", "affects[0]"),
         ("full_repo", "  - path: pydantic_ai.Agent", "affects[1].path"),
         ("full_repo", "    keyword: result_type", "affects[1].keyword"),
         ("full_repo", "      error: TypeError", "example.fails_with.before.error"),
@@ -591,16 +595,16 @@ def test_an_empty_text_field_is_not_also_more_than_one_line(full_repo: Path) -> 
         ),
         pytest.param(
             "full_repo",
-            [("  - pydantic_ai.Agent.run\n", "  - pydantic_ai.Agent.run\n" * 2)],
+            [("  - pydantic_ai.Agent.run_sync\n", "  - pydantic_ai.Agent.run_sync\n" * 2)],
             "affects:",
-            "affects: ['pydantic_ai.Agent.run', 'pydantic_ai.Agent.run', {'path': "
+            "affects: ['pydantic_ai.Agent.run_sync', 'pydantic_ai.Agent.run_sync', {'path': "
             "'pydantic_ai.Agent', 'keyword': 'result_type', 'when': 'passed'}] "
             "has non-unique elements",
             id="affects twice",
         ),
         pytest.param(
             "full_repo",
-            [("  - pydantic_ai.Agent.run", "  - pydantic-ai.Agent.run")],
+            [("  - pydantic_ai.Agent.run_sync", "  - pydantic-ai.Agent.run")],
             "  - pydantic-ai",
             "affects[0]: 'pydantic-ai.Agent.run' is not valid. Expected a Python name or "
             "import path, e.g. TypeError or pydantic_ai.models.openai.OpenAIModel.",
@@ -739,23 +743,40 @@ def test_rules_of_format_0_3(
         ),
         pytest.param(
             "full_repo",
-            [("type: signature", "type: behavior"), ("error: TypeError", "error: AssertionError")],
+            [
+                ("type: signature", "type: behavior"),
+                ("error: TypeError", "error: AssertionError"),
+                (BEFORE_RUN, BEFORE_RUN_ASSERTED),
+            ],
             id="behavior that fails an assert",
         ),
         pytest.param(
             "full_repo", [("error: TypeError", "error: AssertionError")], id="assert for others"
         ),
-        pytest.param("full_repo", [("when: passed", "when: omitted")], id="when omitted"),
+        pytest.param(
+            "full_repo",
+            [("when: passed", "when: omitted"), (BEFORE_RUN, '    Agent("test").run_sync("hi")\n')],
+            id="when omitted",
+        ),
         pytest.param("full_repo", [("    when: passed\n", "")], id="keyword without when"),
         pytest.param(
-            "full_repo", [("  - pydantic_ai.Agent.run", "  - pydantic_ai")], id="one-part affects"
+            "full_repo",
+            [("  - pydantic_ai.Agent.run_sync", "  - pydantic_ai")],
+            id="one-part affects",
         ),
         pytest.param(
             "full_repo",
             [("      message: unexpected keyword argument 'result_type'\n", "")],
             id="failure without its message",
         ),
-        pytest.param("full_repo", [('breaks_in: "2.0.0"', 'breaks_in: "1!2.0"')], id="epoch"),
+        pytest.param(
+            "full_repo",
+            [
+                ('breaks_in: "2.0.0"', 'breaks_in: "1!2.0"'),
+                ('restored_in: "2.1.0"', 'restored_in: "1!2.1"'),
+            ],
+            id="epoch",
+        ),
         pytest.param(
             "repo",
             [
@@ -777,7 +798,224 @@ def test_what_format_0_3_allows(
     assert problems_in(root) == []
 
 
+# --- The code rules of format 0.3 ---------------------------------------------
+
+
+def affects_line(root: Path, index: int) -> int:
+    """The line of ``affects[index]``: the items are the lines that start with ``  - ``."""
+    lines = (root / NOTICE).read_text(encoding="utf-8").splitlines()
+    return [number for number, line in enumerate(lines, 1) if line.startswith("  - ")][index]
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        pytest.param(
+            [(BEFORE_RUN, '    Agent("test", result_type=str)\n')],
+            "example.before must use affects[0], pydantic_ai.Agent.run_sync, "
+            "by its full path or through an import of it.",
+            id="a path that the example doesn't use",
+        ),
+        pytest.param(
+            [(BEFORE_RUN, '    Agent("test").run_sync("hi")\n')],
+            "example.before must pass result_type= to pydantic_ai.Agent, as affects[1] says.",
+            id="a keyword that the example doesn't pass",
+        ),
+        pytest.param(
+            [("    when: passed\n", ""), (BEFORE_RUN, '    Agent("test").run_sync("hi")\n')],
+            "example.before must pass result_type= to pydantic_ai.Agent, as affects[1] says.",
+            id="a keyword without when that the example doesn't pass",
+        ),
+        pytest.param(
+            [("when: passed", "when: omitted")],
+            "example.before must call pydantic_ai.Agent without result_type=, as affects[1] says.",
+            id="an omitted keyword that the example passes",
+        ),
+        pytest.param(
+            [
+                ("when: passed", "when: omitted"),
+                (BEFORE_RUN, '    Agent("test", **options).run_sync("hi")\n'),
+            ],
+            "example.before must call pydantic_ai.Agent without result_type=, as affects[1] says.",
+            id="a call with ** may pass the omitted keyword",
+        ),
+    ],
+)
+def test_example_before_must_break_as_affects_says(
+    full_repo: Path, changes: list[tuple[str, str]], message: str
+) -> None:
+    for old, new in changes:
+        edit(full_repo, old, new)
+    assert problems_in(full_repo) == [at(full_repo, "  before:", message)]
+
+
+def test_example_before_may_call_by_the_full_path(full_repo: Path) -> None:
+    # A call matches by the last part of its name, as for rename.keyword_of.
+    edit(
+        full_repo,
+        "    from pydantic_ai import Agent\n\n" + BEFORE_RUN,
+        '    import pydantic_ai\n\n    pydantic_ai.Agent("test", result_type=str).run_sync("hi")\n',
+    )
+    assert problems_in(full_repo) == []
+
+
+def test_an_omitted_keyword_needs_one_call_without_it(full_repo: Path) -> None:
+    edit(full_repo, "when: passed", "when: omitted")
+    edit(full_repo, BEFORE_RUN, BEFORE_RUN + '    Agent("test").run_sync("hi")\n')
+    assert problems_in(full_repo) == []
+
+
+KEYWORD_ITEM = "  - path: pydantic_ai.Agent\n    keyword: result_type\n"
+
+
+@pytest.mark.parametrize(
+    ("items", "index", "message"),
+    [
+        pytest.param(
+            KEYWORD_ITEM + "    when: passed\n" + KEYWORD_ITEM,
+            2,
+            "affects[2] says the same as affects[1].",
+            id="when passed and when left out",
+        ),
+        pytest.param(
+            KEYWORD_ITEM + KEYWORD_ITEM + "    when: passed\n",
+            2,
+            "affects[2] says the same as affects[1].",
+            id="when left out and when passed",
+        ),
+        pytest.param(
+            KEYWORD_ITEM + KEYWORD_ITEM + "    when: omitted\n",
+            2,
+            "affects[1] and affects[2] say that pydantic_ai.Agent breaks both with and without "
+            "result_type=, so write pydantic_ai.Agent alone.",
+            id="passed and omitted",
+        ),
+        pytest.param(
+            "  - pydantic_ai.Agent\n" + KEYWORD_ITEM,
+            2,
+            "affects[2] is already covered by affects[1], pydantic_ai.Agent.",
+            id="the path alone first",
+        ),
+        pytest.param(
+            KEYWORD_ITEM + "  - pydantic_ai.Agent\n",
+            1,
+            "affects[1] is already covered by affects[2], pydantic_ai.Agent.",
+            id="the path alone last",
+        ),
+    ],
+)
+def test_items_of_affects_must_not_repeat_each_other(
+    full_repo: Path, items: str, index: int, message: str
+) -> None:
+    edit(full_repo, AFFECTS_BLOCK, "affects:\n  - pydantic_ai.Agent.run_sync\n" + items)
+    # The example both passes and leaves out the keyword, so that only the repetition is reported.
+    edit(full_repo, BEFORE_RUN, BEFORE_RUN + '    Agent("test").run_sync("hi")\n')
+    assert problems_in(full_repo) == [
+        f"{NOTICE.as_posix()}:{affects_line(full_repo, index)}: {message}"
+    ]
+
+
+def test_items_of_affects_with_other_keywords_do_not_repeat_each_other(full_repo: Path) -> None:
+    edit(
+        full_repo,
+        "    when: passed\n",
+        "    when: passed\n" + KEYWORD_ITEM.replace("result_type", "deps") + "    when: omitted\n",
+    )
+    assert problems_in(full_repo) == []
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        pytest.param(BEFORE_RUN, id="no assert"),
+        pytest.param(
+            '    assert True\n    Agent("test", result_type=str).run_sync("hi")\n',
+            id="an assert that is not the last statement",
+        ),
+    ],
+)
+def test_a_behavior_change_must_end_with_an_assert(full_repo: Path, before: str) -> None:
+    edit(full_repo, "type: signature", "type: behavior")
+    edit(full_repo, "error: TypeError", "error: AssertionError")
+    edit(full_repo, BEFORE_RUN, before)
+    message = "example.before of a behavior change must end with an assert on the old behavior."
+    assert problems_in(full_repo) == [at(full_repo, "  before:", message)]
+
+
+def test_a_behavior_change_whose_example_is_only_a_comment_has_no_assert(full_repo: Path) -> None:
+    edit(full_repo, "type: signature", "type: behavior")
+    edit(full_repo, "error: TypeError", "error: AssertionError")
+    edit(full_repo, "    from pydantic_ai import Agent\n\n" + BEFORE_RUN, "    # Nothing yet.\n")
+    assert problems_in(full_repo) == [
+        at(full_repo, "  before:", message)
+        for message in (
+            "example.before must pass result_type= to pydantic_ai.Agent, as affects[1] says.",
+            (
+                "example.before must use affects[0], pydantic_ai.Agent.run_sync, "
+                "by its full path or through an import of it."
+            ),
+            "example.before of a behavior change must end with an assert on the old behavior.",
+        )
+    ]
+
+
+def add_notice(repo: Path, package: str, notice_id: str, aliases: str = "") -> Path:
+    """Add a copy of the fixed notice for another package or with another ID."""
+    text = NOTICE_TEXT.replace("id: BW-2026-0001", f"id: {notice_id}")
+    text = text.replace(
+        "  name: pydantic-ai\n  aliases:\n    - pydantic-ai-slim\n", f"  name: {package}\n{aliases}"
+    )
+    rel = Path(f"notices/pypi/{package}/{notice_id}.yaml")
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(text, encoding="utf-8")
+    return rel
+
+
+def test_an_alias_belongs_to_one_package(repo: Path) -> None:
+    other = add_notice(repo, "other-ai", "BW-2026-0002", "  aliases:\n    - pydantic-ai-slim\n")
+    message = (
+        "package.aliases: pydantic-ai-slim is also an alias of {} ({}). "
+        "An alias belongs to one package."
+    )
+    line = line_number(repo, "    - pydantic-ai-slim")
+    assert problems_in(repo) == [
+        f"{other.as_posix()}:{line}: " + message.format("pydantic-ai", NOTICE.as_posix()),
+        f"{NOTICE.as_posix()}:{line}: " + message.format("other-ai", other.as_posix()),
+    ]
+
+
+def test_a_package_with_its_own_notices_is_not_an_alias(repo: Path) -> None:
+    add_notice(repo, "pydantic-ai-slim", "BW-2026-0002")
+    message = (
+        "package.aliases: pydantic-ai-slim has its own notices in notices/pypi/pydantic-ai-slim/, "
+        "so it can't be an alias."
+    )
+    assert problems_in(repo) == [at(repo, "    - pydantic-ai-slim", message)]
+
+
+def test_notices_of_one_package_may_share_an_alias(repo: Path) -> None:
+    add_notice(repo, "pydantic-ai", "BW-2026-0002", "  aliases:\n    - pydantic-ai-slim\n")
+    assert problems_in(repo) == []
+
+
+@pytest.mark.parametrize("depth", [500, 5000])
+def test_a_notice_nested_too_deeply_is_one_problem(repo: Path, depth: int) -> None:
+    nested = "[" * depth + "]" * depth
+    (repo / NOTICE).write_text(f'---\nschema_version: "0.3"\nid: {nested}\n', encoding="utf-8")
+    assert problems_in(repo) == [f"{NOTICE.as_posix()}:1: The notice is nested too deeply to read."]
+
+
+@pytest.mark.parametrize("depth", [500, 5000])
+def test_a_readme_example_nested_too_deeply_is_one_problem(repo: Path, depth: int) -> None:
+    nested = "[" * depth + "]" * depth
+    block = f'```yaml\nschema_version: "0.3"\nid: {nested}\n```\n'
+    (repo / vn.README_FILE).write_text(f"# Test\n\n{block}", encoding="utf-8")
+    assert problems_in(repo) == ["README.md:3: The notice is nested too deeply to read."]
+
+
 # --- Rules beyond the schema --------------------------------------------------
+
+WITHDRAWN = 'withdrawn:\n  date: "{date}"\n  reason: It was a duplicate of another notice.\n'
 
 
 @pytest.mark.parametrize(
@@ -832,6 +1070,41 @@ def test_what_format_0_3_allows(
             "package.aliases must not repeat package.name.",
             id="alias repeats the name",
         ),
+        pytest.param(
+            'breaks_in: "2.0.0"',
+            'breaks_in: "2.0.0"\nrestored_in: "2.0.0"',
+            "restored_in:",
+            "restored_in (2.0.0) must be later than breaks_in (2.0.0).",
+            id="restored_in is breaks_in",
+        ),
+        pytest.param(
+            'breaks_in: "2.0.0"',
+            'breaks_in: "2.0.0"\nrestored_in: "1.9.0"',
+            "restored_in:",
+            "restored_in (1.9.0) must be later than breaks_in (2.0.0).",
+            id="restored_in too early",
+        ),
+        pytest.param(
+            "references:",
+            WITHDRAWN.format(date="2026-02-30") + "references:",
+            "  date:",
+            "withdrawn.date: '2026-02-30' is not a real date.",
+            id="impossible withdrawn date",
+        ),
+        pytest.param(
+            "references:",
+            WITHDRAWN.format(date="2026-10-23") + "references:",
+            "  date:",
+            "withdrawn.date: 2026-10-23 is in the future.",
+            id="future withdrawn date",
+        ),
+        pytest.param(
+            "references:",
+            WITHDRAWN.format(date="2026-10-20") + "references:",
+            "  date:",
+            "withdrawn.date must not be before published.",
+            id="withdrawn before it was published",
+        ),
     ],
 )
 def test_rules_beyond_the_schema(repo: Path, old: str, new: str, starts: str, message: str) -> None:
@@ -849,6 +1122,21 @@ def test_rules_beyond_the_schema(repo: Path, old: str, new: str, starts: str, me
             id="modified on the same day",
         ),
         pytest.param('works_since: "0.7.6"', 'works_since: "2.0.0"', id="works_since is breaks_in"),
+        pytest.param(
+            'breaks_in: "2.0.0"',
+            'breaks_in: "2.0.0"\nrestored_in: "2.0.0.post1"',
+            id="restored_in just after breaks_in",
+        ),
+        pytest.param(
+            "references:",
+            WITHDRAWN.format(date="2026-10-21") + "references:",
+            id="withdrawn on the day it was published",
+        ),
+        pytest.param(
+            "references:",
+            WITHDRAWN.format(date="2026-10-22") + "references:",
+            id="withdrawn tomorrow",
+        ),
     ],
 )
 def test_boundaries_that_are_allowed(repo: Path, old: str, new: str) -> None:
@@ -1650,7 +1938,10 @@ def test_readme_example_must_be_valid_yaml(repo: Path, block: str) -> None:
     assert problems_in(repo) == ["README.md:1: The example notice is not valid YAML."]
 
 
-@pytest.mark.parametrize("block", ["name: example\n", "id: x\n", "- a list\n", "[not yaml\n"])
+@pytest.mark.parametrize(
+    "block",
+    ["name: example\n", "id: x\n", "- a list\n", "[not yaml\n", "[" * 500 + "]" * 500 + "\n"],
+)
 def test_other_yaml_blocks_in_the_readme_are_ignored(repo: Path, block: str) -> None:
     (repo / vn.README_FILE).write_text(f"```yaml\n{block}```\n", encoding="utf-8")
     assert problems_in(repo) == []
