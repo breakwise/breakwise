@@ -801,6 +801,10 @@ def test_what_format_0_3_allows(
 # --- The code rules of format 0.3 ---------------------------------------------
 
 
+# YAML nested 1000 levels deep. PyYAML fails from about 493 levels on Python 3.12 to 3.14.
+DEEP_YAML = "[" * 1000 + "]" * 1000
+
+
 def affects_line(root: Path, index: int) -> int:
     """The line of ``affects[index]``: the items are the lines that start with ``  - ``."""
     lines = (root / NOTICE).read_text(encoding="utf-8").splitlines()
@@ -998,19 +1002,34 @@ def test_notices_of_one_package_may_share_an_alias(repo: Path) -> None:
     assert problems_in(repo) == []
 
 
-@pytest.mark.parametrize("depth", [500, 5000])
-def test_a_notice_nested_too_deeply_is_one_problem(repo: Path, depth: int) -> None:
-    nested = "[" * depth + "]" * depth
-    (repo / NOTICE).write_text(f'---\nschema_version: "0.3"\nid: {nested}\n', encoding="utf-8")
+def test_a_notice_nested_too_deeply_is_one_problem(repo: Path) -> None:
+    text = f'---\nschema_version: "0.3"\nid: {DEEP_YAML}\n'
+    (repo / NOTICE).write_text(text, encoding="utf-8")
     assert problems_in(repo) == [f"{NOTICE.as_posix()}:1: The notice is nested too deeply to read."]
 
 
-@pytest.mark.parametrize("depth", [500, 5000])
-def test_a_readme_example_nested_too_deeply_is_one_problem(repo: Path, depth: int) -> None:
-    nested = "[" * depth + "]" * depth
-    block = f'```yaml\nschema_version: "0.3"\nid: {nested}\n```\n'
+def test_a_readme_example_nested_too_deeply_is_one_problem(repo: Path) -> None:
+    block = f'```yaml\nschema_version: "0.3"\nid: {DEEP_YAML}\n```\n'
     (repo / vn.README_FILE).write_text(f"# Test\n\n{block}", encoding="utf-8")
     assert problems_in(repo) == ["README.md:3: The notice is nested too deeply to read."]
+
+
+@pytest.mark.parametrize("which", ["before", "after"])
+@pytest.mark.parametrize(
+    "code",
+    [
+        # RecursionError: Python 3.12 stops at about 10000 levels, and 3.14 at about 30000.
+        pytest.param("x = " + "1+" * 30000 + "1", id="too deep for the compiler"),
+        # MemoryError: the limit of Python's parser, although no memory runs out.
+        pytest.param("x = " + "-" * 10000 + "1", id="too deep for the parser"),
+    ],
+)
+def test_example_code_nested_too_deeply_to_compile_is_one_problem(
+    repo: Path, which: str, code: str
+) -> None:
+    edit(repo, BEFORE_BLOCK if which == "before" else AFTER_BLOCK, f"    {code}\n")
+    message = f"example.{which} is nested too deeply to compile."
+    assert problems_in(repo) == [at(repo, "    x = ", message)]
 
 
 # --- Rules beyond the schema --------------------------------------------------
@@ -1940,7 +1959,7 @@ def test_readme_example_must_be_valid_yaml(repo: Path, block: str) -> None:
 
 @pytest.mark.parametrize(
     "block",
-    ["name: example\n", "id: x\n", "- a list\n", "[not yaml\n", "[" * 500 + "]" * 500 + "\n"],
+    ["name: example\n", "id: x\n", "- a list\n", "[not yaml\n", DEEP_YAML + "\n"],
 )
 def test_other_yaml_blocks_in_the_readme_are_ignored(repo: Path, block: str) -> None:
     (repo / vn.README_FILE).write_text(f"```yaml\n{block}```\n", encoding="utf-8")

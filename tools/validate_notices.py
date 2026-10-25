@@ -22,9 +22,10 @@ checks that:
   year it was published, and neither ``modified`` nor ``withdrawn.date`` is before
   ``published``,
 - ``works_since`` is not later than ``breaks_in``, and ``restored_in`` is later than it,
-- its example code is valid Python, and a rename's examples use the old name
-  before the change and only the new name after it. Imports, names and
-  attributes count as uses; comments, strings and keyword arguments do not,
+- its example code is valid Python that isn't nested too deeply to compile, and
+  a rename's examples use the old name before the change and only the new name
+  after it. Imports, names and attributes count as uses; comments, strings and
+  keyword arguments do not,
 - for a renamed keyword argument (``rename.keyword_of``), the names are not
   Python keywords, ``example.before`` passes the old keyword to one of the
   callables, and ``example.after`` passes the new keyword and not the old one,
@@ -726,6 +727,12 @@ def _check_examples(notice: Notice) -> Iterator[Problem]:
             line = _code_line(notice.tree, which, error.lineno or 1)
             message = f"example.{which} is not valid Python: {error.msg}"
             yield Problem(notice.rel, line, message)
+        except (RecursionError, MemoryError):
+            # Python's parser stops at code nested too deeply, such as 10000 minus signs in a
+            # row, with MemoryError too. That is its own limit, not memory that ran out.
+            valid = False
+            line = _code_line(notice.tree, which, 1)
+            yield Problem(notice.rel, line, f"example.{which} is nested too deeply to compile.")
     if not valid:
         return
     if notice.data["type"] == "rename":
