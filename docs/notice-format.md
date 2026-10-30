@@ -77,7 +77,17 @@ Notices are plain YAML, without anchors, aliases or tags.
    The validator checks this when the rename stays in one module or renames a keyword argument.
    A move to another module will be checked once the engine can fix code.
    A changed string, such as the model prefix `grok:` becoming `xai:`, is a `signature` change with `instructions`.
-4. **Tested examples.** `tools/verify_examples.py` installs real versions from PyPI
+4. **What breaks.** For every other type, `affects` names the code that the change breaks, and `example.before` uses each of its items.
+   A path alone is used as `rename.from` is: by that exact path, directly or through an import of it,
+   or as a method or an attribute that the example reaches through an object.
+   A keyword argument breaks when it is passed, so `example.before` passes it to the callable,
+   which counts by the last part of its name, as for `rename.keyword_of`.
+   With `when: omitted`, it breaks when it is left out, as when a default changed,
+   so `example.before` calls the callable at least once without it and without `**`, because `**` may pass it.
+   No two items say the same, and a missing `when` counts as `passed`.
+   A keyword argument that breaks both when it is passed and when it is left out is written as its path alone,
+   and a path alone already covers every keyword argument of that path.
+5. **Tested examples.** `tools/verify_examples.py` installs real versions from PyPI
    and checks that `example.before` runs on the last stable release before `breaks_in` and fails on `breaks_in`,
    and that `example.after` runs on `breaks_in` and on `works_since`.
    When `works_since` is not later than that last stable release, `example.after` must run on it too.
@@ -100,13 +110,19 @@ Notices are plain YAML, without anchors, aliases or tags.
    The latest release changes over time, so the result of this check depends on when it runs.
    CI runs it on the notices that a pull request changes, on every notice when the tools change,
    and on every notice on each push to `main` and every week.
-5. **Offline examples.** Examples run without network access and with fake API keys,
+6. **Offline examples.** Examples run without network access and with fake API keys,
    so they must not call real services: an example that fails after trying to reach the network fails the check.
-   For a `behavior` change, use `assert` so that the example fails when the behavior differs,
+   For a `behavior` change, use `assert` so that the example fails when the behavior differs:
+   `example.before` ends with an `assert` on the old behavior, as its last statement,
    and `example.fails_with.before.error` is `AssertionError`.
-6. **New notices start as `draft`.** A maintainer checks them against the sources and sets `verified`.
-7. **IDs:** take the next free number, with four to eight digits and no extra leading zeros.
+7. **New notices start as `draft`.** A maintainer checks them against the sources and sets `verified`.
+8. **IDs:** take the next free number, with four to eight digits and no extra leading zeros.
    A maintainer fixes any clash when merging.
+9. **Dates and versions in order.** Dates are real dates, and none is in the future.
+   `modified` and `withdrawn.date` are not before `published`, and the year in the ID is the year the notice was published.
+   `works_since` is not later than `breaks_in`, and `restored_in` is later than it.
+10. **An alias belongs to one package.** No two packages list the same alias in `package.aliases`,
+    and a package that has notices of its own, in `notices/<ecosystem>/<package>/`, is not an alias of another.
 
 ## Changelog
 
