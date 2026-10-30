@@ -1018,7 +1018,7 @@ def test_a_readme_example_nested_too_deeply_is_one_problem(repo: Path) -> None:
 @pytest.mark.parametrize(
     "code",
     [
-        # RecursionError: Python 3.12 stops at about 10000 levels, and 3.14 at about 30000.
+        # RecursionError: Python 3.12 stops at about 10000 levels, and 3.14 only past 10000.
         pytest.param("x = " + "1+" * 30000 + "1", id="too deep for the compiler"),
         # MemoryError: the limit of Python's parser, although no memory runs out.
         pytest.param("x = " + "-" * 10000 + "1", id="too deep for the parser"),
