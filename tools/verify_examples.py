@@ -20,6 +20,13 @@ on real releases of its package:
   release just before it, ``example.after`` must fail, so that ``works_since``
   is the first release on which it runs. For a rename, that exception must
   name the new name;
+- wherever an example must fail, its exception must match ``example.fails_with``
+  when it is set, as it must for every type but rename: its name, the first line
+  of the exception up to the first ":", and a part of its message when one is given;
+- ``restored_in``, when it is set, must be a release on PyPI. There
+  ``example.before`` runs again, and so does ``example.after``. On the release
+  just before it, ``example.before`` must still fail. On a latest release from
+  ``restored_in`` on, ``example.before`` must run instead of fail;
 - for a rename, the paths must resolve with ``pkgutil.resolve_name`` where the
   examples need them: ``rename.from`` on every release where ``example.before``
   runs, but not on ``breaks_in``, and ``rename.to`` on every release where
@@ -30,6 +37,10 @@ on real releases of its package:
   ``works_since``, as ``inspect.signature`` shows it. Taking it only through
   ``**kwargs`` does not count, because then ``example.after`` can run although
   the callable ignores the argument;
+- for every other type, every path in ``affects`` must resolve where
+  ``example.before`` runs. Where it must fail, the path alone of a removal must
+  be gone, and every other path must still resolve. Each keyword in ``affects``
+  must be an explicit parameter of its callable where ``example.before`` runs;
 - on the latest release after ``breaks_in`` that accepts the Python of the
   examples, everything is checked as on ``breaks_in``. That is the latest stable
   release, or the latest pre-release when ``breaks_in`` is a pre-release and no
@@ -39,6 +50,9 @@ on real releases of its package:
 
 The paths and signatures are read by one probe per release, which runs like an
 example in the environment of that release.
+
+A withdrawn notice is not verified: it gets one result that says so, and
+nothing is installed or run.
 
 Releases and their upload times come from PyPI's JSON Simple API (PEP 691 and
 PEP 700). Each version is installed from PyPI with ``uv`` together with its
@@ -81,7 +95,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
@@ -256,12 +270,30 @@ class Check:
 
 
 @dataclass(frozen=True)
+class Failure:
+    """What the failure of an example must show. An empty field asks for nothing.
+
+    ``named`` must be in the exception, as the name of a rename must. ``error`` is
+    the exception's name, and ``message`` a part of the exception, from
+    ``example.fails_with``.
+    """
+
+    named: str = ""
+    error: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True)
 class SignatureCheck:
-    """Check that a callable takes a keyword argument as an explicit parameter on one version."""
+    """Check that a callable takes a keyword argument as an explicit parameter on one version.
+
+    ``field`` is the field that names the callable and the keyword, such as ``affects[1]``.
+    """
 
     version: Version
     target: str
     keyword: str
+    field: str = "rename.keyword_of"
 
     @property
     def label(self) -> str:
@@ -281,6 +313,8 @@ class PathCheck:
     path: str
     should_exist: bool
     where: str
+    # Said after the failure of a path that should exist, such as what else the change may be.
+    hint: str = ""
 
     @property
     def label(self) -> str:
@@ -342,8 +376,16 @@ class LatestNote:
 
 
 @dataclass(frozen=True)
+class Withdrawn:
+    """A notice that was withdrawn, which is not verified."""
+
+    date: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Result:
-    check: Check | SignatureCheck | PathCheck | LatestNote
+    check: Check | SignatureCheck | PathCheck | LatestNote | Withdrawn
     passed: bool
     detail: str
 
@@ -444,12 +486,14 @@ def plan_checks(
     breaks_in: Version,
     works_since: Version | None,
     latest: Version | None = None,
+    restored_in: Version | None = None,
 ) -> list[Check]:
     """Decide which examples to run on which versions.
 
     ``latest`` is the latest release after ``breaks_in`` to check, from latest_release().
     """
-    for field, version in (("breaks_in", breaks_in), ("works_since", works_since)):
+    fields = (("breaks_in", breaks_in), ("works_since", works_since), ("restored_in", restored_in))
+    for field, version in fields:
         if version is not None and version not in releases:
             raise VerifyError(f"{field} {version} is not a release on PyPI, or it was yanked.")
     earlier = [v for v in releases if v < breaks_in]
@@ -475,13 +519,47 @@ def plan_checks(
         older = [v for v in releases if v < works_since]
         if older:
             checks.append(Check(max(older), "after", should_run=False))
+    checks += _restored_checks(releases, breaks_in, restored_in)
     # The library may change after breaks_in, for example by bringing the old name back.
-    if latest is not None:
-        checks += [
-            Check(latest, "before", should_run=False, latest=True),
-            Check(latest, "after", should_run=True, latest=True),
-        ]
+    checks += _latest_checks(checks, latest, restored_in)
     return checks
+
+
+def _restored_checks(
+    releases: Mapping[Version, Release], breaks_in: Version, restored_in: Version | None
+) -> list[Check]:
+    """``example.before`` runs again on ``restored_in``, and fails on the release just before it."""
+    if restored_in is None:
+        return []
+    checks = []
+    just_before = max(v for v in releases if v < restored_in)
+    # breaks_in is checked already.
+    if just_before != breaks_in:
+        checks.append(Check(just_before, "before", should_run=False))
+    return [
+        *checks,
+        Check(restored_in, "before", should_run=True),
+        Check(restored_in, "after", should_run=True),
+    ]
+
+
+def _latest_checks(
+    planned: Sequence[Check], latest: Version | None, restored_in: Version | None
+) -> list[Check]:
+    """On the latest release, ``example.before`` fails, or runs from ``restored_in`` on.
+
+    ``example.after`` runs there. An example that is planned on that release already
+    is not run twice.
+    """
+    if latest is None:
+        return []
+    restored = restored_in is not None and latest >= restored_in
+    planned_there = {check.example for check in planned if check.version == latest}
+    return [
+        Check(latest, example, should_run, latest=True)
+        for example, should_run in (("before", restored), ("after", True))
+        if example not in planned_there
+    ]
 
 
 def latest_release(
@@ -654,12 +732,11 @@ def _stop(process: subprocess.Popen[str]) -> None:
 
 
 def evaluate(  # noqa: PLR0911 - one return for each way an example can end
-    check: Check, run: Run, expected_error: str | None = None
+    check: Check, run: Run, expected: Failure | None = None
 ) -> Result:
     """Compare how an example ended with what the notice says should happen.
 
-    A failure only counts as expected if the exception that ended the example
-    contains ``expected_error``.
+    A failure only counts as expected if it shows what ``expected`` asks for.
     """
     if run.returncode is None:
         return Result(check, False, "did not finish in time, so it was stopped")
@@ -673,9 +750,31 @@ def evaluate(  # noqa: PLR0911 - one return for each way an example can end
         return Result(check, False, f"{message}: {run.summary}")
     if check.should_run:
         return Result(check, False, f"should run, but failed: {run.summary}")
-    if expected_error is not None and expected_error not in run.error:
-        return Result(check, False, f"fails, but not because of {expected_error}: {run.summary}")
+    mismatch = _mismatch(expected, run) if expected is not None else None
+    if mismatch is not None:
+        return Result(check, False, f"{mismatch}: {run.summary}")
     return Result(check, True, f"fails as expected: {run.summary}")
+
+
+def _mismatch(expected: Failure, run: Run) -> str | None:
+    """How a failure differs from what is expected of it, or None."""
+    if expected.named and expected.named not in run.error:
+        return f"fails, but not because of {expected.named}"
+    name = exception_name(run.error)
+    if expected.error and name != expected.error:
+        return f"fails, but with {name or 'no exception'} instead of {expected.error}"
+    if expected.message and expected.message not in run.error:
+        return f"fails with {name}, but its message doesn't contain {expected.message!r}"
+    return None
+
+
+def exception_name(error: str) -> str:
+    """The name of the exception in ``Run.error``: its first line up to the first ":".
+
+    A first line without ":", such as ``KeyError``, is the name. No exception has no name.
+    """
+    lines = error.strip().splitlines()
+    return lines[0].partition(":")[0] if lines else ""
 
 
 def plan_path_checks(rename: Mapping[str, Any], checks: Sequence[Check]) -> list[PathCheck]:
@@ -701,6 +800,52 @@ def plan_path_checks(rename: Mapping[str, Any], checks: Sequence[Check]) -> list
             where = "example.after runs"
             path_checks.append(PathCheck(version, "rename.to", rename["to"], True, where))
     return path_checks
+
+
+REMOVAL_HINT = "If it was removed, the type may be removal."
+
+
+def plan_affects_checks(
+    kind: str, affects: Sequence[str | Mapping[str, str]], checks: Sequence[Check]
+) -> list[PathCheck]:
+    """Decide on which versions the paths in ``affects`` must resolve, or must not.
+
+    Every path resolves where ``example.before`` runs. Where it must fail, the path
+    alone of a removal is gone, like ``rename.from``. Any other path still resolves
+    there, because the change is in how the code uses it.
+    """
+    path_checks = []
+    for check in checks:
+        if check.example != "before":
+            continue
+        for index, item in enumerate(affects):
+            path = item if isinstance(item, str) else item["path"]
+            field = f"affects[{index}]"
+            if check.should_run:
+                where = "example.before runs"
+                path_checks.append(PathCheck(check.version, field, path, True, where))
+            elif kind == "removal" and isinstance(item, str):
+                where = "example.before must fail"
+                path_checks.append(PathCheck(check.version, field, path, False, where))
+            else:
+                where = "example.before must fail"
+                path_checks.append(
+                    PathCheck(check.version, field, path, True, where, hint=REMOVAL_HINT)
+                )
+    return path_checks
+
+
+def plan_affects_signatures(
+    affects: Sequence[str | Mapping[str, str]], checks: Sequence[Check]
+) -> list[SignatureCheck]:
+    """Each keyword in ``affects`` is an explicit parameter where ``example.before`` runs."""
+    return [
+        SignatureCheck(check.version, item["path"], item["keyword"], f"affects[{index}]")
+        for check in checks
+        if check.example == "before" and check.should_run
+        for index, item in enumerate(affects)
+        if not isinstance(item, str)
+    ]
 
 
 def _callables_where_examples_run(
@@ -759,7 +904,8 @@ def evaluate_path(  # noqa: PLR0911 - one return for each way a path check can e
     if check.should_exist:
         if error is None:
             return Result(check, True, f"{check.path} exists")
-        return Result(check, False, f"{check.path} does not exist {on} ({error})")
+        hint = f". {check.hint}" if check.hint else ""
+        return Result(check, False, f"{check.path} does not exist {on} ({error}){hint}")
     if error is None:
         return Result(check, False, f"{check.path} still exists {on}")
     if probe.used_network:
@@ -777,9 +923,14 @@ def evaluate_signature(check: SignatureCheck, probe: Probe) -> Result:
     if found is True:
         return Result(check, True, f"takes {check.keyword} as an explicit parameter")
     if found is False:
+        fix = (
+            f"remove {check.target} from rename.keyword_of"
+            if check.field == "rename.keyword_of"
+            else f"change {check.field}"
+        )
         message = (
             f"has no explicit parameter {check.keyword}, and taking it through **kwargs "
-            f"does not count. Check the versions, or remove {check.target} from rename.keyword_of."
+            f"does not count. Check the versions, or {fix}."
         )
         return Result(check, False, message)
     if found is None:
@@ -813,31 +964,22 @@ def verify_notice(
     ``python_version`` is the version of ``python``. Without it, examples_python() finds it.
     """
     notice = _read_valid_notice(path)
+    if "withdrawn" in notice:
+        withdrawn = Withdrawn(notice["withdrawn"]["date"], notice["withdrawn"]["reason"])
+        detail = f"withdrawn on {withdrawn.date}: {withdrawn.reason.rstrip('.')}. Not verified."
+        return [Result(withdrawn, True, detail)]
     name = notice["package"]["name"]
     breaks_in = Version(notice["breaks_in"])
     works_since = Version(notice["works_since"]) if "works_since" in notice else None
-    rename = notice["rename"] if notice["type"] == "rename" else None
-    keyword_of = rename.get("keyword_of", []) if rename else []
-    # For a rename, each example must fail because of the name it uses, not another reason.
-    expected_errors: dict[str, str | None] = {"before": None, "after": None}
-    if rename and keyword_of:
-        expected_errors = {"before": rename["from"], "after": rename["to"]}
-    elif rename:
-        old, new = distinguishing_names(rename["from"], rename["to"])
-        expected_errors = {"before": old, "after": new}
+    restored_in = Version(notice["restored_in"]) if "restored_in" in notice else None
+    expected = expected_failures(notice)
 
     releases = fetch(name)
     python_version = python_version or examples_python(python)
     latest, note = latest_release(releases, breaks_in, python_version)
-    checks = plan_checks(releases, breaks_in, works_since, latest)
-    path_checks = plan_path_checks(rename, checks) if rename else []
+    checks = plan_checks(releases, breaks_in, works_since, latest, restored_in)
     signature_versions = [v for v in (breaks_in, works_since, latest) if v is not None]
-    signature_checks = [
-        SignatureCheck(version, target, rename["to"])
-        for version in dict.fromkeys(signature_versions)
-        for target in keyword_of
-        if rename
-    ]
+    path_checks, signature_checks = plan_probe(notice, checks, signature_versions)
     results = []
     with tempfile.TemporaryDirectory(prefix="breakwise-") as tmp_name:
         tmp = Path(tmp_name).resolve()
@@ -855,8 +997,7 @@ def verify_notice(
             run = _shorten_paths(
                 run_example(interpreter(check.version), code, tmp / f"run-{number}"), tmp
             )
-            expected_error = None if check.should_run else expected_errors[check.example]
-            results.append(evaluate(check, run, expected_error))
+            results.append(evaluate(check, run, expected[check.example]))
         # One probe for each version reads every path and signature that the version needs.
         probes: dict[Version, Probe] = {}
         versions = [c.version for c in path_checks] + [s.version for s in signature_checks]
@@ -873,11 +1014,66 @@ def verify_notice(
         results += [evaluate_path(check, probes[check.version]) for check in path_checks]
         results += [evaluate_signature(check, probes[check.version]) for check in signature_checks]
     on_latest = {check.version for check in checks if check.latest}
-    results = [
-        _on_latest(result) if not result.passed and result.check.version in on_latest else result
-        for result in results
-    ]
+    results = [_on_latest(r) if _failed_on(r, on_latest) else r for r in results]
     return [*results, note] if note else results
+
+
+def _failed_on(result: Result, versions: Collection[Version]) -> bool:
+    """Whether a check failed on one of ``versions``."""
+    return (
+        not result.passed
+        and not isinstance(result.check, Withdrawn)
+        and result.check.version in versions
+    )
+
+
+def expected_failures(notice: Mapping[str, Any]) -> dict[str, Failure]:
+    """What the failure of each example must show.
+
+    For a rename, the exception names the name that the example uses, so that a
+    failure for another reason doesn't count. ``example.fails_with`` adds the
+    exception's name and a part of its message, for every type.
+    """
+    named = {"before": "", "after": ""}
+    if notice["type"] == "rename":
+        rename = notice["rename"]
+        if "keyword_of" in rename:
+            named = {"before": rename["from"], "after": rename["to"]}
+        else:
+            old, new = distinguishing_names(rename["from"], rename["to"])
+            named = {"before": old, "after": new}
+    fails_with = notice["example"].get("fails_with", {})
+    return {
+        example: Failure(
+            named[example],
+            fails_with.get(example, {}).get("error", ""),
+            fails_with.get(example, {}).get("message", ""),
+        )
+        for example in ("before", "after")
+    }
+
+
+def plan_probe(
+    notice: Mapping[str, Any], checks: Sequence[Check], signature_versions: Sequence[Version]
+) -> tuple[list[PathCheck], list[SignatureCheck]]:
+    """The paths and the signatures that the probes check, for a rename or for ``affects``.
+
+    The callables of a renamed keyword argument take the new keyword on
+    ``signature_versions``.
+    """
+    if notice["type"] != "rename":
+        affects = notice["affects"]
+        return (
+            plan_affects_checks(notice["type"], affects, checks),
+            plan_affects_signatures(affects, checks),
+        )
+    rename = notice["rename"]
+    signatures = [
+        SignatureCheck(version, target, rename["to"])
+        for version in dict.fromkeys(signature_versions)
+        for target in rename.get("keyword_of", [])
+    ]
+    return plan_path_checks(rename, checks), signatures
 
 
 def _on_latest(result: Result) -> Result:
@@ -969,6 +1165,10 @@ def report(paths: Sequence[Path], python: str, root: Path, in_github: bool) -> i
                 print(github_error(shown, str(error)))
             continue
         for result in results:
+            if isinstance(result.check, Withdrawn):
+                # Nothing was run, so there is no version or field to show.
+                print(f"  skip  {result.detail}")
+                continue
             status = "ok  " if result.passed else "FAIL"
             if isinstance(result.check, LatestNote):
                 status = "note"
