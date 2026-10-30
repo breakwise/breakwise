@@ -251,6 +251,84 @@ def test_explain_names_every_callable_of_a_renamed_keyword(
     ) in out
 
 
+WITHDRAWN = 'withdrawn:\n  date: "2026-10-25"\n  reason: It says the same as BW-2026-0001.\n'
+WITHDRAWN_LINE = "Withdrawn on 2026-10-25: It says the same as BW-2026-0001."
+RESTORED_IN = 'breaks_in: "2.0.0"\nrestored_in: "2.1.0"'
+RESTORED_LINE = "Restored in: 2.1.0, where the old code works again"
+AFFECTS = (
+    "affects:\n"
+    "  - demo.legacy\n"
+    "  - path: demo.connect\n    keyword: timeout\n"
+    "  - path: demo.connect\n    keyword: verify\n    when: passed\n"
+    "  - path: demo.connect\n    keyword: retries\n    when: omitted\n"
+)
+AFFECTS_LINES = [
+    "",
+    "Affects:",
+    "  demo.legacy",
+    "  demo.connect, when timeout= is passed",
+    "  demo.connect, when verify= is passed",
+    "  demo.connect, when retries= is left out",
+]
+
+
+def edit_removal(bundled: Path, *changes: tuple[str, str]) -> None:
+    notice = bundled / "pypi/demo/BW-2026-0002.yaml"
+    text = notice.read_text(encoding="utf-8")
+    for old, new in changes:
+        assert old in text
+        text = text.replace(old, new, 1)
+    notice.write_text(text, encoding="utf-8")
+
+
+def with_restored_in(output: list[str]) -> list[str]:
+    at = output.index("Breaks in:   2.0.0") + 1
+    return [*output[:at], RESTORED_LINE, *output[at:]]
+
+
+def with_affects(output: list[str]) -> list[str]:
+    # The section goes before the empty line that comes before Instructions.
+    at = output.index("Instructions:") - 1
+    return [*output[:at], *AFFECTS_LINES, *output[at:]]
+
+
+def test_explain_says_when_a_notice_was_withdrawn(
+    bundled: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_removal(bundled, ("references:", WITHDRAWN + "references:"))
+    output = [WITHDRAWN_LINE, *REMOVAL_OUTPUT]
+    assert explain(capsys, "BW-2026-0002") == (0, "\n".join(output) + "\n", "")
+
+
+def test_explain_says_where_the_old_code_works_again(
+    bundled: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_removal(bundled, ('breaks_in: "2.0.0"', RESTORED_IN))
+    output = with_restored_in(REMOVAL_OUTPUT)
+    assert explain(capsys, "BW-2026-0002") == (0, "\n".join(output) + "\n", "")
+
+
+def test_explain_lists_what_the_change_affects(
+    bundled: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_removal(bundled, ("example:", AFFECTS + "example:"))
+    output = with_affects(REMOVAL_OUTPUT)
+    assert explain(capsys, "BW-2026-0002") == (0, "\n".join(output) + "\n", "")
+
+
+def test_explain_shows_withdrawn_restored_in_and_affects_together(
+    bundled: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_removal(
+        bundled,
+        ("references:", WITHDRAWN + "references:"),
+        ('breaks_in: "2.0.0"', RESTORED_IN),
+        ("example:", AFFECTS + "example:"),
+    )
+    output = [WITHDRAWN_LINE, *with_affects(with_restored_in(REMOVAL_OUTPUT))]
+    assert explain(capsys, "BW-2026-0002") == (0, "\n".join(output) + "\n", "")
+
+
 @pytest.mark.usefixtures("bundled")
 def test_ids_may_be_written_in_lowercase(capsys: pytest.CaptureFixture[str]) -> None:
     code, out, _ = explain(capsys, "bw-2026-0002")
