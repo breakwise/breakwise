@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import builtins
 import datetime as dt
 import json
 import shutil
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import pytest
@@ -1015,19 +1017,28 @@ def test_a_readme_example_nested_too_deeply_is_one_problem(repo: Path) -> None:
 
 
 @pytest.mark.parametrize("which", ["before", "after"])
-@pytest.mark.parametrize(
-    "code",
-    [
-        # RecursionError: Python 3.12 stops at about 10000 levels, and 3.14 only past 10000.
-        pytest.param("x = " + "1+" * 30000 + "1", id="too deep for the compiler"),
-        # MemoryError: the limit of Python's parser, although no memory runs out.
-        pytest.param("x = " + "-" * 10000 + "1", id="too deep for the parser"),
-    ],
-)
-def test_example_code_nested_too_deeply_to_compile_is_one_problem(
-    repo: Path, which: str, code: str
+def test_example_code_too_deep_for_the_parser_is_one_problem(repo: Path, which: str) -> None:
+    # MemoryError: a fixed limit of Python's parser, although no memory runs out.
+    code = "    x = " + "-" * 10000 + "1\n"
+    edit(repo, BEFORE_BLOCK if which == "before" else AFTER_BLOCK, code)
+    message = f"example.{which} is nested too deeply to compile."
+    assert problems_in(repo) == [at(repo, "    x = ", message)]
+
+
+@pytest.mark.parametrize("which", ["before", "after"])
+def test_example_code_too_deep_for_the_compiler_is_one_problem(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, which: str
 ) -> None:
-    edit(repo, BEFORE_BLOCK if which == "before" else AFTER_BLOCK, f"    {code}\n")
+    # From Python 3.14, the compiler's limit follows the size of the C stack, so where it
+    # raises RecursionError depends on the machine: "1+" * 30000 raises it with an 8 MB
+    # stack and compiles with 16 MB. So compile() raises it here.
+    def compile_too_deep(source: str, *args: Any, **kwargs: Any) -> Any:
+        if "too_deep" in source:
+            raise RecursionError("maximum recursion depth exceeded during compilation")
+        return builtins.compile(source, *args, **kwargs)
+
+    monkeypatch.setattr(vn, "compile", compile_too_deep, raising=False)
+    edit(repo, BEFORE_BLOCK if which == "before" else AFTER_BLOCK, "    x = too_deep\n")
     message = f"example.{which} is nested too deeply to compile."
     assert problems_in(repo) == [at(repo, "    x = ", message)]
 
