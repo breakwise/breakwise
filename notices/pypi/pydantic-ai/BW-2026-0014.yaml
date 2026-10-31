@@ -1,0 +1,41 @@
+---
+schema_version: "0.3"
+id: BW-2026-0014
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: behavior
+breaks_in: "2.0.0b1"
+summary: The default end_strategy of Agent changed from 'early' to 'graceful' in 2.0.0b1.
+instructions: >-
+  Pass end_strategy="early" to Agent to keep the behavior of 1.x,
+  where the run ends as soon as an output tool succeeds and the function tools of that response don't run.
+  With the new default, "graceful", the function tools that the model called before an output tool run first,
+  and a ModelRetry from one of them suppresses the output, so the model gets another round.
+affects:
+  - path: pydantic_ai.Agent
+    keyword: end_strategy
+    when: omitted
+example:
+  before: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    assert agent.end_strategy == "early"
+  after: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel(), end_strategy="early")
+    assert agent.end_strategy == "early"
+  fails_with:
+    before:
+      error: AssertionError
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v2.0.0b1/pydantic_ai_slim/pydantic_ai/_agent_graph.py
