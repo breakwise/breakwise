@@ -1,0 +1,71 @@
+---
+schema_version: "0.3"
+id: BW-2026-0018
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: removal
+breaks_in: "2.0.0b1"
+works_since: "1.0.15"
+summary: The get() method of AgentStream was removed in 2.0.0b1, and the response property takes its place.
+instructions: >-
+  Read stream.response in place of calling stream.get() on an AgentStream,
+  such as the stream of a model request node in agent.iter().
+  Both give the current state of the response as a ModelResponse.
+affects:
+  - pydantic_ai.result.AgentStream.get
+example:
+  before: |
+    import asyncio
+
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+
+
+    async def main():
+        async with agent.iter("hi") as run:
+            async for node in run:
+                if Agent.is_model_request_node(node):
+                    async with node.stream(run.ctx) as stream:
+                        async for _ in stream:
+                            pass
+                        print(stream.get().parts)
+
+
+    asyncio.run(main())
+  after: |
+    import asyncio
+
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+
+
+    async def main():
+        async with agent.iter("hi") as run:
+            async for node in run:
+                if Agent.is_model_request_node(node):
+                    async with node.stream(run.ctx) as stream:
+                        async for _ in stream:
+                            pass
+                        print(stream.response.parts)
+
+
+    asyncio.run(main())
+  fails_with:
+    before:
+      error: AttributeError
+      message: has no attribute 'get'
+    after:
+      error: AttributeError
+      message: has no attribute 'response'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.0.15/pydantic_ai_slim/pydantic_ai/result.py
