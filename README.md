@@ -47,7 +47,7 @@ schema_version: "0.3"
 id: BW-2026-0001
 status: verified
 published: "2026-10-21"
-modified: "2026-10-30"
+modified: "2026-10-31"
 package:
   ecosystem: PyPI
   name: pydantic-ai
