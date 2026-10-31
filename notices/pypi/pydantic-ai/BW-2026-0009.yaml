@@ -1,0 +1,54 @@
+---
+schema_version: "0.3"
+id: BW-2026-0009
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "0.7.3"
+summary: RunUsage.response_tokens was renamed to output_tokens, and the old name was removed in 2.0.0b1.
+rename:
+  from: pydantic_ai.usage.RunUsage.response_tokens
+  to: pydantic_ai.usage.RunUsage.output_tokens
+example:
+  before: |
+    from pydantic_ai import Agent, RunContext
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+
+
+    @agent.tool
+    def tokens(ctx: RunContext[None]) -> int:
+        return ctx.usage.response_tokens
+
+
+    agent.run_sync("hi")
+  after: |
+    from pydantic_ai import Agent, RunContext
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+
+
+    @agent.tool
+    def tokens(ctx: RunContext[None]) -> int:
+        return ctx.usage.output_tokens
+
+
+    agent.run_sync("hi")
+  fails_with:
+    before:
+      error: AttributeError
+      message: has no attribute 'response_tokens'
+    after:
+      error: AttributeError
+      message: has no attribute 'output_tokens'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.3/pydantic_ai_slim/pydantic_ai/usage.py
