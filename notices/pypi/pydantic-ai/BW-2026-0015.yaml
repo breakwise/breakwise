@@ -10,7 +10,7 @@ package:
     - pydantic-ai-slim
 type: behavior
 breaks_in: "2.0.0b1"
-works_since: "0.7.6"
+works_since: "1.3.0"
 summary: The model prefix openai uses the Responses API from 2.0.0b1, and openai-chat keeps Chat Completions.
 instructions: >-
   A model name that starts with openai: now makes an OpenAIResponsesModel, not an OpenAIChatModel.
@@ -37,8 +37,8 @@ example:
     before:
       error: AssertionError
     after:
-      error: ImportError
-      message: cannot import name 'OpenAIChatModel'
+      error: ValueError
+      message: 'Unknown provider: openai-chat'
 references:
   - https://pydantic.dev/docs/ai/project/changelog/
   - https://github.com/pydantic/pydantic-ai/blob/v2.0.0b1/pydantic_ai_slim/pydantic_ai/models/__init__.py
