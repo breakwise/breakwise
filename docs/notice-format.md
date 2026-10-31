@@ -138,7 +138,7 @@ Notices are plain YAML, without anchors, aliases or tags.
 
 ## Changelog
 
-- **0.3** (2026-10-25):
+- **0.3** (2026-10-31):
   - `affects` names the code that a change other than a rename breaks: paths, written alone,
     and keyword arguments of a callable, as `path` and `keyword`, that break when they are passed or when they are left out.
   - `example.fails_with` says how the examples fail. Every type but `rename` needs it, with `after` when `works_since` is set,
