@@ -7,8 +7,8 @@ import errno
 import os
 import sys
 import textwrap
-from collections.abc import Sequence
-from typing import TextIO
+from collections.abc import Mapping, Sequence
+from typing import Any, TextIO
 
 from packaging.version import Version
 
@@ -101,17 +101,6 @@ def render(notice: Notice) -> str:
         if "keyword_of" in rename:
             names = f"the keyword argument {names} of {', '.join(rename['keyword_of'])}"
         change += f" {names}"
-    since = data.get("works_since")
-    if not since:
-        works_since = "not known, so the fix waits for the upgrade"
-    elif Version(since) < Version(data["breaks_in"]):
-        works_since = f"{since}, so the fix can come before the upgrade"
-    else:
-        # The validator allows works_since to equal breaks_in, but not to come after it.
-        works_since = (
-            f"{since}, the release that breaks the old code, so the fix comes with the upgrade"
-        )
-
     lines = [
         f"{data['id']} ({status})",
         data["summary"],
@@ -119,8 +108,15 @@ def render(notice: Notice) -> str:
         f"Package:     {where}",
         f"Change:      {change}",
         f"Breaks in:   {data['breaks_in']}",
-        f"Works since: {works_since}",
     ]
+    if "restored_in" in data:
+        lines.append(f"Restored in: {data['restored_in']}, where the old code works again")
+    lines.append(f"Works since: {_works_since(data)}")
+    if "withdrawn" in data:
+        withdrawn = data["withdrawn"]
+        lines.insert(0, f"Withdrawn on {withdrawn['date']}: {withdrawn['reason']}")
+    if "affects" in data:
+        lines += ["", "Affects:", *(f"  {_affected(item)}" for item in data["affects"])]
     if "instructions" in data:
         lines += ["", "Instructions:", _indent(data["instructions"])]
     lines += [
@@ -139,5 +135,24 @@ def render(notice: Notice) -> str:
     return "\n".join(lines)
 
 
+def _works_since(data: Mapping[str, Any]) -> str:
+    """When the new code works, and what that means for the fix."""
+    since = data.get("works_since")
+    if not since:
+        return "not known, so the fix waits for the upgrade"
+    if Version(since) < Version(data["breaks_in"]):
+        return f"{since}, so the fix can come before the upgrade"
+    # The validator allows works_since to equal breaks_in, but not to come after it.
+    return f"{since}, the release that breaks the old code, so the fix comes with the upgrade"
+
+
 def _indent(text: str) -> str:
     return textwrap.indent(text.rstrip("\n"), "    ")
+
+
+def _affected(item: str | Mapping[str, str]) -> str:
+    """One line for an item of ``affects``: a path, or a callable and one of its keywords."""
+    if isinstance(item, str):
+        return item
+    when = "is passed" if item.get("when", "passed") == "passed" else "is left out"
+    return f"{item['path']}, when {item['keyword']}= {when}"
