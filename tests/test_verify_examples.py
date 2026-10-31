@@ -958,22 +958,48 @@ def test_evaluate(
     detail: str,
 ) -> None:
     check = ve.Check(Version("2.0.0"), "before", should_run=should_run)
-    result = ve.evaluate(check, ve.Run(returncode, "", error), expected)
+    # In these errors, the type's name is what comes before the first ":".
+    run = ve.Run(returncode, "", error, error_type=error.partition(":")[0])
+    result = ve.evaluate(check, run, expected)
     assert (result.passed, result.detail) == (passed, detail)
 
 
+@posix_only
 @pytest.mark.parametrize(
-    ("error", "name"),
+    ("code", "name"),
     [
-        ("TypeError: f() got an unexpected keyword argument 'x'\n", "TypeError"),
-        ("KeyError\n", "KeyError"),
-        ("demo.errors.UserError: Unknown keyword: `x`\n", "demo.errors.UserError"),
-        ("AssertionError\nnote: added later\n", "AssertionError"),
-        ("", ""),
+        pytest.param("int('x')\n", "ValueError", id="a builtin"),
+        pytest.param(
+            "import json\njson.loads('')\n", "json.decoder.JSONDecodeError", id="a module"
+        ),
+        pytest.param("class Late(Exception): pass\nraise Late\n", "Late", id="the example's own"),
+        pytest.param(
+            "class Outer:\n    class Inner(Exception): pass\nraise Outer.Inner('x')\n",
+            "Outer.Inner",
+            id="a nested class",
+        ),
+        pytest.param("x = 1\n", "", id="no exception"),
     ],
 )
-def test_the_name_of_an_exception_is_its_first_line_up_to_a_colon(error: str, name: str) -> None:
-    assert ve.exception_name(error) == name
+def test_the_type_of_an_exception_is_named_as_python_prints_it(
+    tmp_path: Path, code: str, name: str
+) -> None:
+    run = ve.run_example(PYTHON, code, tmp_path)
+    assert ve.exception_name(run) == name
+
+
+@posix_only
+def test_a_syntax_error_in_a_library_is_named_by_its_type(tmp_path: Path) -> None:
+    # Python prints the file and the line of code before the type's name.
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+    code = "import sys\nsys.path.insert(0, '.')\nimport broken\n"
+    run = ve.run_example(PYTHON, code, tmp_path)
+    assert run.error.startswith('  File "')
+    assert ve.exception_name(run) == "SyntaxError"
+    check = ve.Check(Version("2.0"), "before", should_run=False)
+    result = ve.evaluate(check, run, ve.Failure(error="SyntaxError"))
+    assert result.passed
 
 
 def test_run_summary_is_one_short_line() -> None:

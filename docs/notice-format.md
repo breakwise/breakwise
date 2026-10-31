@@ -96,7 +96,7 @@ Notices are plain YAML, without anchors, aliases or tags.
    For a `rename`, the error that stops `example.before` must name the old name,
    and the error that stops `example.after` must name the new name.
    Wherever an example must fail, its exception must also match `example.fails_with` when it is set, as it is for every type but `rename`:
-   `error` is the exception's name, the first line of the exception up to its first `:` as Python prints it,
+   `error` is the name of the exception's type as Python prints it, with its module unless it is a builtin, such as `TypeError` or `pydantic_ai.exceptions.UserError`,
    and `message` is a part of the exception.
    The paths of a `rename` must also resolve with `pkgutil.resolve_name`, with each release installed:
    `rename.from` on every release where `example.before` runs, but not on `breaks_in`,
