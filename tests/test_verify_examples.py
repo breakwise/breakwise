@@ -293,6 +293,111 @@ def test_plan_reports_versions_it_cannot_use(
         plan(releases(*available), breaks_in, works_since)
 
 
+def full_plan(
+    available: dict[Version, ve.Release],
+    breaks_in: str,
+    latest: str | None = None,
+    restored_in: str | None = None,
+) -> list[tuple[str, str, bool, bool]]:
+    checks = ve.plan_checks(
+        available,
+        Version(breaks_in),
+        None,
+        Version(latest) if latest else None,
+        Version(restored_in) if restored_in else None,
+    )
+    return [(str(c.version), c.example, c.should_run, c.latest) for c in checks]
+
+
+BREAKS = [("1.9.0", "before", True, False), ("2.0.0", "before", False, False)]
+BREAKS += [("2.0.0", "after", True, False)]
+
+
+def test_plan_with_restored_in() -> None:
+    available = releases("1.9.0", "2.0.0", "2.1.0", "2.2.0")
+    assert full_plan(available, "2.0.0", restored_in="2.2.0") == [
+        *BREAKS,
+        # example.before still fails just before restored_in, and runs on it.
+        ("2.1.0", "before", False, False),
+        ("2.2.0", "before", True, False),
+        ("2.2.0", "after", True, False),
+    ]
+
+
+def test_plan_with_restored_in_right_after_breaks_in() -> None:
+    # The release just before restored_in is breaks_in, which is checked already.
+    available = releases("1.9.0", "2.0.0", "2.1.0")
+    assert full_plan(available, "2.0.0", restored_in="2.1.0") == [
+        *BREAKS,
+        ("2.1.0", "before", True, False),
+        ("2.1.0", "after", True, False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("latest", "restored_in", "last"),
+    [
+        pytest.param(
+            "2.1.0",
+            "3.0.0",
+            [
+                ("2.5.0", "before", False, False),
+                ("3.0.0", "before", True, False),
+                ("3.0.0", "after", True, False),
+                ("2.1.0", "before", False, True),
+                ("2.1.0", "after", True, True),
+            ],
+            id="the latest release is before restored_in",
+        ),
+        pytest.param(
+            "3.0.0",
+            "2.5.0",
+            [
+                ("2.1.0", "before", False, False),
+                ("2.5.0", "before", True, False),
+                ("2.5.0", "after", True, False),
+                ("3.0.0", "before", True, True),
+                ("3.0.0", "after", True, True),
+            ],
+            id="the latest release is after restored_in",
+        ),
+        pytest.param(
+            "3.0.0",
+            "3.0.0",
+            [
+                ("2.5.0", "before", False, False),
+                ("3.0.0", "before", True, False),
+                ("3.0.0", "after", True, False),
+            ],
+            id="the latest release is restored_in",
+        ),
+    ],
+)
+def test_plan_of_the_latest_release_follows_restored_in(
+    latest: str, restored_in: str, last: list[tuple[str, str, bool, bool]]
+) -> None:
+    available = releases("1.9.0", "2.0.0", "2.1.0", "2.5.0", "3.0.0")
+    assert full_plan(available, "2.0.0", latest, restored_in) == [*BREAKS, *last]
+
+
+def test_plan_does_not_repeat_the_latest_release_when_restored_in_plans_it() -> None:
+    # The latest release is the one just before restored_in, where example.before fails.
+    available = releases("1.9.0", "2.0.0", "2.1.0", "2.5.0")
+    assert full_plan(available, "2.0.0", "2.1.0", "2.5.0") == [
+        *BREAKS,
+        ("2.1.0", "before", False, False),
+        ("2.5.0", "before", True, False),
+        ("2.5.0", "after", True, False),
+        ("2.1.0", "after", True, True),
+    ]
+
+
+def test_restored_in_must_be_a_release_on_pypi() -> None:
+    with pytest.raises(ve.VerifyError) as raised:
+        full_plan(releases("1.9.0", "2.0.0"), "2.0.0", restored_in="2.5.0")
+    assert str(raised.value) == "restored_in 2.5.0 is not a release on PyPI, or it was yanked."
+
+
 def test_dependencies_are_cut_off_one_day_after_the_release() -> None:
     uploaded = dt.datetime(2025, 8, 20, 15, 31, 24, 123456, tzinfo=UTC)
     assert ve.exclude_newer(uploaded) == "2025-08-21T15:31:24Z"
@@ -566,7 +671,8 @@ def test_a_failure_on_a_line_that_mentions_the_old_name_is_not_enough(tmp_path: 
     # The traceback quotes the failing line, so it contains the old name, but the error does not.
     run = ve.run_example(PYTHON, "Old = 1\nprint(Old / 0)\n", tmp_path)
     assert "Old" in run.stderr
-    result = ve.evaluate(ve.Check(Version("2.0"), "before", should_run=False), run, "Old")
+    check = ve.Check(Version("2.0"), "before", should_run=False)
+    result = ve.evaluate(check, run, ve.Failure(named="Old"))
     assert (result.passed, result.detail) == (
         False,
         "fails, but not because of Old: ZeroDivisionError: division by zero",
@@ -614,7 +720,8 @@ def test_network_use_is_caught_even_when_the_error_is_reworded(tmp_path: Path) -
     )
     run = ve.run_example(PYTHON, code, tmp_path)
     assert ve.NETWORK_BLOCKED not in run.stderr
-    result = ve.evaluate(ve.Check(Version("2.0"), "before", should_run=False), run, "OpenAIModel")
+    check = ve.Check(Version("2.0"), "before", should_run=False)
+    result = ve.evaluate(check, run, ve.Failure(named="OpenAIModel"))
     assert not result.passed
     assert "tried to use the network" in result.detail
 
@@ -760,7 +867,7 @@ def test_a_process_that_leaves_the_group_cannot_hold_the_run_open(tmp_path: Path
 
 
 @pytest.mark.parametrize(
-    ("should_run", "returncode", "error", "expected_error", "passed", "detail"),
+    ("should_run", "returncode", "error", "expected", "passed", "detail"),
     [
         (True, 0, "", None, True, "runs"),
         (True, 1, "ImportError: X\n", None, False, "should run, but failed: ImportError: X"),
@@ -770,7 +877,7 @@ def test_a_process_that_leaves_the_group_cannot_hold_the_run_open(tmp_path: Path
             False,
             1,
             "ImportError: cannot import name 'OpenAIModel'\n",
-            "OpenAIModel",
+            ve.Failure(named="OpenAIModel"),
             True,
             "fails as expected: ImportError: cannot import name 'OpenAIModel'",
         ),
@@ -778,9 +885,67 @@ def test_a_process_that_leaves_the_group_cannot_hold_the_run_open(tmp_path: Path
             False,
             1,
             "ZeroDivisionError: division by zero\n",
-            "OpenAIModel",
+            ve.Failure(named="OpenAIModel"),
             False,
             "fails, but not because of OpenAIModel: ZeroDivisionError: division by zero",
+        ),
+        pytest.param(
+            False,
+            1,
+            "TypeError: Agent.__init__() got an unexpected keyword argument 'mcp_servers'\n",
+            ve.Failure(error="TypeError", message="unexpected keyword argument 'mcp_servers'"),
+            True,
+            "fails as expected: TypeError: Agent.__init__() got an unexpected keyword argument "
+            "'mcp_servers'",
+            id="fails_with matches",
+        ),
+        pytest.param(
+            False,
+            1,
+            "ModuleNotFoundError: No module named 'pydantic_ai'\n",
+            ve.Failure(error="TypeError"),
+            False,
+            "fails, but with ModuleNotFoundError instead of TypeError: "
+            "ModuleNotFoundError: No module named 'pydantic_ai'",
+            id="another exception",
+        ),
+        pytest.param(
+            False,
+            1,
+            "TypeError: f() takes 1 positional argument but 2 were given\n",
+            ve.Failure(error="TypeError", message="mcp_servers"),
+            False,
+            "fails with TypeError, but its message doesn't contain 'mcp_servers': "
+            "TypeError: f() takes 1 positional argument but 2 were given",
+            id="another message",
+        ),
+        pytest.param(
+            False,
+            3,
+            "",
+            ve.Failure(error="TypeError"),
+            False,
+            "fails, but with no exception instead of TypeError: exit code 3",
+            id="no exception",
+        ),
+        pytest.param(
+            False,
+            1,
+            "pydantic_ai.exceptions.UserError: Unknown keyword arguments: `toolsets`\n",
+            ve.Failure(error="pydantic_ai.exceptions.UserError", message="toolsets"),
+            True,
+            "fails as expected: pydantic_ai.exceptions.UserError: Unknown keyword arguments: "
+            "`toolsets`",
+            id="an exception with its module",
+        ),
+        pytest.param(
+            False,
+            1,
+            "ImportError: cannot import name 'Other'\n",
+            ve.Failure(named="OpenAIModel", error="ImportError"),
+            False,
+            "fails, but not because of OpenAIModel: ImportError: cannot import name 'Other'",
+            id="a rename checks its name first",
         ),
     ],
 )
@@ -788,13 +953,27 @@ def test_evaluate(
     should_run: bool,
     returncode: int,
     error: str,
-    expected_error: str | None,
+    expected: ve.Failure | None,
     passed: bool,
     detail: str,
 ) -> None:
     check = ve.Check(Version("2.0.0"), "before", should_run=should_run)
-    result = ve.evaluate(check, ve.Run(returncode, "", error), expected_error)
+    result = ve.evaluate(check, ve.Run(returncode, "", error), expected)
     assert (result.passed, result.detail) == (passed, detail)
+
+
+@pytest.mark.parametrize(
+    ("error", "name"),
+    [
+        ("TypeError: f() got an unexpected keyword argument 'x'\n", "TypeError"),
+        ("KeyError\n", "KeyError"),
+        ("demo.errors.UserError: Unknown keyword: `x`\n", "demo.errors.UserError"),
+        ("AssertionError\nnote: added later\n", "AssertionError"),
+        ("", ""),
+    ],
+)
+def test_the_name_of_an_exception_is_its_first_line_up_to_a_colon(error: str, name: str) -> None:
+    assert ve.exception_name(error) == name
 
 
 def test_run_summary_is_one_short_line() -> None:
@@ -1011,6 +1190,162 @@ def test_callables_of_a_keyword_are_checked_where_an_example_runs() -> None:
     ]
 
 
+KEYWORD_ITEM = {"path": "demo.connect", "keyword": "timeout"}
+
+
+def affects_plan(
+    kind: str, affects: list[Any], restored_in: str | None = None
+) -> list[tuple[str, str, str, bool, str, str]]:
+    restored = Version(restored_in) if restored_in else None
+    available = releases("1.9.0", "2.0.0", "2.1.0")
+    checks = ve.plan_checks(available, Version("2.0.0"), None, restored_in=restored)
+    return [
+        (str(c.version), c.field, c.path, c.should_exist, c.where, c.hint)
+        for c in ve.plan_affects_checks(kind, affects, checks)
+    ]
+
+
+RUNS = "example.before runs"
+FAILS = "example.before must fail"
+
+
+def test_paths_in_affects_of_a_removal() -> None:
+    # The path alone is gone where example.before fails. With a keyword, it isn't.
+    assert affects_plan("removal", ["demo.legacy", KEYWORD_ITEM]) == [
+        ("1.9.0", "affects[0]", "demo.legacy", True, RUNS, ""),
+        ("1.9.0", "affects[1]", "demo.connect", True, RUNS, ""),
+        ("2.0.0", "affects[0]", "demo.legacy", False, FAILS, ""),
+        ("2.0.0", "affects[1]", "demo.connect", True, FAILS, ve.REMOVAL_HINT),
+    ]
+
+
+@pytest.mark.parametrize("kind", ["signature", "behavior"])
+def test_paths_in_affects_of_a_change_in_use(kind: str) -> None:
+    # The code still uses every path where example.before fails, just in another way.
+    assert affects_plan(kind, ["demo.legacy", KEYWORD_ITEM]) == [
+        ("1.9.0", "affects[0]", "demo.legacy", True, RUNS, ""),
+        ("1.9.0", "affects[1]", "demo.connect", True, RUNS, ""),
+        ("2.0.0", "affects[0]", "demo.legacy", True, FAILS, ve.REMOVAL_HINT),
+        ("2.0.0", "affects[1]", "demo.connect", True, FAILS, ve.REMOVAL_HINT),
+    ]
+
+
+def test_paths_in_affects_resolve_again_from_restored_in() -> None:
+    assert affects_plan("removal", ["demo.legacy"], restored_in="2.1.0") == [
+        ("1.9.0", "affects[0]", "demo.legacy", True, RUNS, ""),
+        ("2.0.0", "affects[0]", "demo.legacy", False, FAILS, ""),
+        ("2.1.0", "affects[0]", "demo.legacy", True, RUNS, ""),
+    ]
+
+
+def test_keywords_in_affects_are_explicit_parameters_where_before_runs() -> None:
+    available = releases("1.9.0", "2.0.0", "2.1.0")
+    checks = ve.plan_checks(available, Version("2.0.0"), None, restored_in=Version("2.1.0"))
+    signatures = ve.plan_affects_signatures(["demo.legacy", KEYWORD_ITEM], checks)
+    assert [(str(s.version), s.target, s.keyword, s.field) for s in signatures] == [
+        ("1.9.0", "demo.connect", "timeout", "affects[1]"),
+        ("2.1.0", "demo.connect", "timeout", "affects[1]"),
+    ]
+
+
+def test_a_path_that_must_still_exist_says_that_the_change_may_be_a_removal() -> None:
+    check = ve.PathCheck(Version("2.0"), "affects[0]", "demo.Old", True, FAILS, ve.REMOVAL_HINT)
+    result = ve.evaluate_path(check, ve.Probe({"demo.Old": GONE}))
+    assert not result.passed
+    assert result.detail == (
+        f"demo.Old does not exist on 2.0, where example.before must fail ({GONE}). "
+        "If it was removed, the type may be removal."
+    )
+
+
+def test_a_keyword_in_affects_without_an_explicit_parameter_names_the_item() -> None:
+    check = ve.SignatureCheck(Version("2.0.0"), "demo.connect", "timeout", "affects[1]")
+    probe = ve.Probe(signatures={("demo.connect", "timeout"): False})
+    assert ve.evaluate_signature(check, probe).detail == (
+        "has no explicit parameter timeout, and taking it through **kwargs does not count. "
+        "Check the versions, or change affects[1]."
+    )
+
+
+@pytest.mark.parametrize(
+    ("notice", "before", "after"),
+    [
+        pytest.param(
+            {"type": "rename", "rename": {"from": "a.Old", "to": "a.New"}, "example": {}},
+            ve.Failure(named="Old"),
+            ve.Failure(named="New"),
+            id="a rename",
+        ),
+        pytest.param(
+            {
+                "type": "rename",
+                "rename": {"keyword_of": ["a.f"], "from": "old", "to": "new"},
+                "example": {},
+            },
+            ve.Failure(named="old"),
+            ve.Failure(named="new"),
+            id="a renamed keyword",
+        ),
+        pytest.param(
+            {
+                "type": "rename",
+                "rename": {"from": "a.Old", "to": "a.New"},
+                "example": {"fails_with": {"before": {"error": "ImportError"}}},
+            },
+            ve.Failure(named="Old", error="ImportError"),
+            ve.Failure(named="New"),
+            id="a rename with fails_with",
+        ),
+        pytest.param(
+            {
+                "type": "removal",
+                "example": {
+                    "fails_with": {
+                        "before": {"error": "AttributeError", "message": "legacy"},
+                        "after": {"error": "AttributeError"},
+                    }
+                },
+            },
+            ve.Failure(error="AttributeError", message="legacy"),
+            ve.Failure(error="AttributeError"),
+            id="a removal",
+        ),
+    ],
+)
+def test_expected_failures(notice: dict[str, Any], before: ve.Failure, after: ve.Failure) -> None:
+    assert ve.expected_failures(notice) == {"before": before, "after": after}
+
+
+WITHDRAWN = 'withdrawn:\n  date: "2026-10-25"\n  reason: It says the same as another notice.\n'
+WITHDRAWN_DETAIL = "withdrawn on 2026-10-25: It says the same as another notice. Not verified."
+
+
+def write_withdrawn_notice(tmp_path: Path) -> Path:
+    notice = write_notice(tmp_path)
+    text = notice.read_text(encoding="utf-8").replace("references:", WITHDRAWN + "references:")
+    notice.write_text(text, encoding="utf-8")
+    return notice
+
+
+def test_a_withdrawn_notice_is_not_verified(tmp_path: Path) -> None:
+    def fetch(name: str) -> dict[Version, ve.Release]:
+        raise AssertionError("a withdrawn notice doesn't need PyPI")
+
+    results = ve.verify_notice(
+        write_withdrawn_notice(tmp_path), sys.executable, fetch=fetch, python_version=PYTHON_VERSION
+    )
+    withdrawn = ve.Withdrawn("2026-10-25", "It says the same as another notice.")
+    assert results == [ve.Result(withdrawn, True, WITHDRAWN_DETAIL)]
+
+
+def test_the_report_shows_a_withdrawn_notice_on_a_line_of_its_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notice = write_withdrawn_notice(tmp_path)
+    assert ve.report([notice], sys.executable, tmp_path, in_github=False) == 0
+    assert capsys.readouterr().out == f"\n{notice.name}\n  skip  {WITHDRAWN_DETAIL}\n"
+
+
 # --- A whole notice, offline --------------------------------------------------
 
 FAKE_VERSIONS = {
@@ -1093,13 +1428,26 @@ def verify(notice: Path, index: FakeIndex) -> list[str]:
         installer=index.install,
         python_version=PYTHON_VERSION,
     )
-    return [f"{status(r)} {r.check.version} {r.check.label}: {r.detail}" for r in results]
+    return [line(result) for result in results]
+
+
+def line(result: ve.Result) -> str:
+    """A result as one line, like the report but shorter."""
+    if isinstance(result.check, ve.Withdrawn):
+        return f"skip {result.detail}"
+    return f"{status(result)} {result.check.version} {result.check.label}: {result.detail}"
 
 
 def status(result: ve.Result) -> str:
     if isinstance(result.check, ve.LatestNote):
         return "note"
     return "ok" if result.passed else "FAIL"
+
+
+def version(result: ve.Result) -> Version:
+    """The version of a result's check. A withdrawn notice has no checks with versions."""
+    assert not isinstance(result.check, ve.Withdrawn)
+    return result.check.version
 
 
 @posix_only
@@ -1357,17 +1705,12 @@ def test_a_newer_release_for_another_python_is_passed_over_with_a_note(
     )
     assert asked == [sys.executable]
     assert all(result.passed for result in results)
-    assert {
-        str(result.check.version) for result in results if result.check.version > Version("2.0.0")
-    } == {"3.0.0", "3.1.0"}
-    note = results[-1]
-    assert (status(note), str(note.check.version), note.check.label, note.detail) == (
-        "note",
-        "3.1.0",
-        "latest release",
-        "3.1.0 requires Python >=99, so the latest release checked is 3.0.0",
+    assert {str(version(r)) for r in results if version(r) > Version("2.0.0")} == {"3.0.0", "3.1.0"}
+    assert line(results[-1]) == (
+        "note 3.1.0 latest release: "
+        "3.1.0 requires Python >=99, so the latest release checked is 3.0.0"
     )
-    assert "3.1.0" not in [version for _, version, _ in index.installed]
+    assert "3.1.0" not in [installed for _, installed, _ in index.installed]
 
 
 @posix_only
@@ -1415,30 +1758,204 @@ def test_only_valid_notices_are_verified(
     assert str(raised.value).endswith(". Run tools/validate_notices.py.")
 
 
-@posix_only
-def test_any_failure_counts_for_changes_other_than_renames(tmp_path: Path) -> None:
+FAILS_WITH_IMPORT_ERROR = (
+    "    before:\n      error: ImportError\n    after:\n      error: ImportError\n"
+)
+
+
+def write_removal_notice(tmp_path: Path, fails_with: str = FAILS_WITH_IMPORT_ERROR) -> Path:
+    """The fake rename, written as a removal of fakelib.Old with affects and fails_with."""
     notice = write_notice(tmp_path)
     text = notice.read_text(encoding="utf-8").replace("type: rename", "type: removal")
     text = text.replace(
         "rename:\n  from: fakelib.Old\n  to: fakelib.New\n",
         "instructions: Use New instead.\naffects:\n  - fakelib.Old\n",
     )
-    # Format 0.3 requires them for a removal. The verifier doesn't check them yet.
-    text = text.replace(
-        "    New()\n",
-        "    New()\n  fails_with:\n    before:\n      error: ImportError\n"
-        "    after:\n      error: ImportError\n",
-    )
+    text = text.replace("    New()\n", f"    New()\n  fails_with:\n{fails_with}")
     notice.write_text(text, encoding="utf-8")
-    lines = verify(notice, FakeIndex())
-    assert [line.split(":")[0] for line in lines] == [
+    return notice
+
+
+@posix_only
+def test_a_correct_removal_passes_every_check(tmp_path: Path) -> None:
+    lines = verify(write_removal_notice(tmp_path), FakeIndex())
+    assert [line.split(": ")[0] for line in lines] == [
         "ok 1.9.0 example.before",
         "ok 1.9.0 example.after",
         "ok 2.0.0 example.before",
         "ok 2.0.0 example.after",
         "ok 1.5.0 example.after",
         "ok 1.0.0 example.after",
+        "ok 1.9.0 affects[0]",
+        "ok 2.0.0 affects[0]",
     ]
+    assert lines[-2:] == [
+        "ok 1.9.0 affects[0]: fakelib.Old exists",
+        "ok 2.0.0 affects[0]: fakelib.Old is gone",
+    ]
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("fails_with", "failure"),
+    [
+        pytest.param(
+            "    before:\n      error: TypeError\n    after:\n      error: ImportError\n",
+            "FAIL 2.0.0 example.before: fails, but with ImportError instead of TypeError: "
+            "ImportError: cannot import name 'Old'",
+            id="before with another exception",
+        ),
+        pytest.param(
+            "    before:\n      error: ImportError\n      message: cannot import name 'Older'\n"
+            "    after:\n      error: ImportError\n",
+            "FAIL 2.0.0 example.before: fails with ImportError, but its message doesn't contain "
+            "\"cannot import name 'Older'\": ImportError: cannot import name 'Old'",
+            id="before with another message",
+        ),
+        pytest.param(
+            "    before:\n      error: ImportError\n    after:\n      error: NameError\n",
+            "FAIL 1.0.0 example.after: fails, but with ImportError instead of NameError: "
+            "ImportError: cannot import name 'New'",
+            id="after with another exception",
+        ),
+    ],
+)
+def test_the_failure_of_a_removal_must_match_fails_with(
+    tmp_path: Path, fails_with: str, failure: str
+) -> None:
+    lines = verify(write_removal_notice(tmp_path, fails_with), FakeIndex())
+    found = [line for line in lines if line.startswith("FAIL")]
+    assert len(found) == 1
+    assert found[0].startswith(failure)
+
+
+@posix_only
+def test_a_path_alone_of_a_removal_must_be_gone_where_before_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Old is still there, but the example fails for the reason its fails_with gives.
+    monkeypatch.setitem(FAKE_VERSIONS, "2.0.0", "class Old:\n    def __init__(self, x): pass\n")
+    fails_with = "    before:\n      error: TypeError\n    after:\n      error: ImportError\n"
+    lines = verify(write_removal_notice(tmp_path, fails_with), FakeIndex())
+    assert [line for line in lines if line.startswith("FAIL") and "affects" in line] == [
+        "FAIL 2.0.0 affects[0]: fakelib.Old still exists on 2.0.0, where example.before must fail"
+    ]
+
+
+def write_signature_notice(tmp_path: Path) -> Path:
+    """The fake keyword rename, written as a signature change with a keyword in affects."""
+    notice = write_keyword_notice(tmp_path)
+    text = notice.read_text(encoding="utf-8").replace("type: rename", "type: signature")
+    text = text.replace(
+        "rename:\n  keyword_of:\n    - fakelib.make\n  from: old\n  to: new\n",
+        "instructions: Pass new instead of old.\n"
+        "affects:\n  - path: fakelib.make\n    keyword: old\n",
+    )
+    text = text.replace(
+        "    make(new=1)\n",
+        "    make(new=1)\n  fails_with:\n"
+        "    before:\n      error: TypeError\n      message: argument 'old'\n"
+        "    after:\n      error: TypeError\n      message: argument 'new'\n",
+    )
+    notice.write_text(text, encoding="utf-8")
+    return notice
+
+
+@posix_only
+def test_a_correct_signature_change_with_a_keyword_in_affects_passes(tmp_path: Path) -> None:
+    lines = verify(write_signature_notice(tmp_path), FakeIndex(KEYWORD_VERSIONS))
+    assert all(line.startswith("ok") for line in lines)
+    assert lines[6:] == [
+        "ok 1.9.0 affects[0]: fakelib.make exists",
+        # The callable is still there where example.before fails: only how it is called changed.
+        "ok 2.0.0 affects[0]: fakelib.make exists",
+        "ok 1.9.0 signature of fakelib.make: takes old as an explicit parameter",
+    ]
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("version", "code", "failure"),
+    [
+        pytest.param(
+            "2.0.0",
+            "def other(): pass\n",
+            "FAIL 2.0.0 affects[0]: fakelib.make does not exist on 2.0.0, where example.before "
+            "must fail (AttributeError: module 'fakelib' has no attribute 'make'). "
+            "If it was removed, the type may be removal.",
+            id="the callable is gone",
+        ),
+        pytest.param(
+            "1.9.0",
+            "def make(**kwargs): pass\n",
+            "FAIL 1.9.0 signature of fakelib.make: has no explicit parameter old, and taking it "
+            "through **kwargs does not count. Check the versions, or change affects[0].",
+            id="the keyword only through **kwargs",
+        ),
+    ],
+)
+def test_a_keyword_in_affects_is_checked_on_the_real_releases(
+    tmp_path: Path, version: str, code: str, failure: str
+) -> None:
+    index = FakeIndex({**KEYWORD_VERSIONS, version: code})
+    lines = verify(write_signature_notice(tmp_path), index)
+    assert failure in lines
+
+
+def add_restored_in(notice: Path, version: str) -> Path:
+    text = notice.read_text(encoding="utf-8")
+    text = text.replace('breaks_in: "2.0.0"\n', f'breaks_in: "2.0.0"\nrestored_in: "{version}"\n')
+    notice.write_text(text, encoding="utf-8")
+    return notice
+
+
+@posix_only
+def test_restored_in_brings_the_old_code_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "2.1.0", "class New: pass\n")
+    monkeypatch.setitem(FAKE_VERSIONS, "2.2.0", "class Old: pass\nclass New: pass\n")
+    lines = verify(add_restored_in(write_notice(tmp_path), "2.2.0"), FakeIndex())
+    assert all(line.startswith("ok") for line in lines)
+    # 2.2.0 is also the latest release, so it isn't checked twice.
+    assert [line.split(": ")[0] for line in lines if " 2.1.0 " in line or " 2.2.0 " in line] == [
+        "ok 2.1.0 example.before",
+        "ok 2.2.0 example.before",
+        "ok 2.2.0 example.after",
+        "ok 2.1.0 rename.from",
+        "ok 2.2.0 rename.from",
+        "ok 2.2.0 rename.to",
+    ]
+    assert "ok 2.2.0 rename.from: fakelib.Old exists" in lines
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("latest", "failures"),
+    [
+        pytest.param("class Old: pass\nclass New: pass\n", [], id="the old code still works"),
+        pytest.param(
+            "class New: pass\n",
+            [
+                "FAIL 3.0.0 example.before: should run, but failed: ImportError",
+                "FAIL 3.0.0 rename.from: fakelib.Old does not exist on 3.0.0, where",
+            ],
+            id="the old code broke again",
+        ),
+    ],
+)
+def test_after_restored_in_the_old_code_must_run_on_the_latest_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, latest: str, failures: list[str]
+) -> None:
+    monkeypatch.setitem(FAKE_VERSIONS, "2.1.0", "class Old: pass\nclass New: pass\n")
+    monkeypatch.setitem(FAKE_VERSIONS, "3.0.0", latest)
+    lines = verify(add_restored_in(write_notice(tmp_path), "2.1.0"), FakeIndex())
+    assert "ok 3.0.0 example.before: runs" in lines or failures
+    found = [line for line in lines if line.startswith("FAIL")]
+    assert len(found) == len(failures)
+    for line, start in zip(found, failures, strict=True):
+        assert line.startswith(start)
+        assert line.endswith(LATEST)
 
 
 # --- A renamed keyword argument, offline --------------------------------------
@@ -1511,7 +2028,12 @@ def test_a_correct_keyword_rename_passes_every_check(tmp_path: Path) -> None:
         "ok 1.5.0 signature of fakelib.make: takes new as an explicit parameter",
     ]
     # The paths and signatures are checked in the environments the examples ran in.
-    assert [version for _, version, _ in index.installed] == ["1.9.0", "2.0.0", "1.5.0", "1.0.0"]
+    assert [installed for _, installed, _ in index.installed] == [
+        "1.9.0",
+        "2.0.0",
+        "1.5.0",
+        "1.0.0",
+    ]
 
 
 @posix_only

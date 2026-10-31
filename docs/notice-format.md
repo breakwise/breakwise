@@ -95,6 +95,9 @@ Notices are plain YAML, without anchors, aliases or tags.
    and `example.after` must fail on the release just before `works_since`, so that both are the first such releases.
    For a `rename`, the error that stops `example.before` must name the old name,
    and the error that stops `example.after` must name the new name.
+   Wherever an example must fail, its exception must also match `example.fails_with` when it is set, as it is for every type but `rename`:
+   `error` is the exception's name, the first line of the exception up to its first `:` as Python prints it,
+   and `message` is a part of the exception.
    The paths of a `rename` must also resolve with `pkgutil.resolve_name`, with each release installed:
    `rename.from` on every release where `example.before` runs, but not on `breaks_in`,
    and `rename.to` on every release where `example.after` runs.
@@ -103,11 +106,20 @@ Notices are plain YAML, without anchors, aliases or tags.
    It must also have `rename.to` as an explicit parameter on `breaks_in` and on `works_since`, as `inspect.signature` shows it.
    A callable that takes it only through `**kwargs` fails this check and doesn't belong in the list,
    because `example.after` could run on it while the argument is ignored.
+   For every other type, every path in `affects` must resolve on every release where `example.before` runs.
+   Where `example.before` must fail, the path alone of a `removal` must not resolve, like `rename.from`,
+   and every other path must still resolve, because the change is in how code uses it: if it doesn't, the change may be a `removal`.
+   Each keyword argument in `affects` must be an explicit parameter of its callable on every release where `example.before` runs.
    The verifier also checks the latest release after `breaks_in` that accepts the Python of the examples:
    the latest stable release, or the latest pre-release when `breaks_in` is a pre-release and no stable release follows it.
    There `example.before` must still fail and `example.after` must still run, and the paths and signatures are checked as on `breaks_in`.
    A failure there means that the library may have changed after `breaks_in`, for example by bringing the old name back.
+   `restored_in`, when it is set, must be a release on PyPI. Both examples run on it,
+   and `example.before` must still fail on the release just before it.
+   On a latest release from `restored_in` on, `example.before` must run instead of fail,
+   and the paths of a `rename` or a `removal` resolve there again.
    The latest release changes over time, so the result of this check depends on when it runs.
+   A notice with `withdrawn` is not verified: the verifier says so, and installs and runs nothing.
    CI runs it on the notices that a pull request changes, on every notice when the tools change,
    and on every notice on each push to `main` and every week.
 6. **Offline examples.** Examples run without network access and with fake API keys,
