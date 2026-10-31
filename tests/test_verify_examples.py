@@ -749,6 +749,7 @@ def test_examples_get_fake_keys_and_no_secrets(
         "import os, sys\n"
         "assert 'BREAKWISE_TEST_SECRET' not in os.environ\n"
         f"assert os.environ['OPENAI_API_KEY'] == {ve.FAKE_KEY!r}\n"
+        f"assert os.environ['GROK_API_KEY'] == {ve.FAKE_KEY!r}\n"
         f"assert os.environ['HOME'] == {str(tmp_path)!r}\n"
         "assert sys.flags.isolated and sys.flags.utf8_mode\n"
     )
