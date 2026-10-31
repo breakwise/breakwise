@@ -1,0 +1,52 @@
+---
+schema_version: "0.3"
+id: BW-2026-0013
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: removal
+breaks_in: "2.0.0b1"
+works_since: "1.97.0"
+summary: stream_responses() of streamed results was removed in 2.0.0b1, and stream_response() takes its place.
+instructions: >-
+  Call stream_response() in place of stream_responses().
+  On StreamedRunResult and StreamedRunResultSync, it yields each ModelResponse alone, not (response, is_last) pairs:
+  replace `for response, is_last in result.stream_responses()` with `for response in result.stream_response()`,
+  and compute `is_last = response.state != "incomplete"` inside the loop.
+  On AgentStream, it yields the same responses as before.
+affects:
+  - pydantic_ai.result.AgentStream.stream_responses
+  - pydantic_ai.result.StreamedRunResult.stream_responses
+  - pydantic_ai.result.StreamedRunResultSync.stream_responses
+example:
+  before: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    result = agent.run_stream_sync("hi")
+    for response, is_last in result.stream_responses():
+        print(response.parts, is_last)
+  after: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    result = agent.run_stream_sync("hi")
+    for response in result.stream_response():
+        is_last = response.state != "incomplete"
+        print(response.parts, is_last)
+  fails_with:
+    before:
+      error: AttributeError
+      message: has no attribute 'stream_responses'
+    after:
+      error: AttributeError
+      message: has no attribute 'stream_response'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.107.9/pydantic_ai_slim/pydantic_ai/result.py
