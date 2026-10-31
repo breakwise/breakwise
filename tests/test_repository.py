@@ -18,6 +18,9 @@ RELEASED_SCHEMAS = {
     "schema/notice-0.2.schema.json": (
         "25271d2dd195944b7cf299034f628d48e32c8853b882d253831f5055ce231773"
     ),
+    "schema/notice-0.3.schema.json": (
+        "c6a56cc6f7638102203559f96c115717eafc7322d8c62398c870b08b7f2ac1f4"
+    ),
 }
 
 
