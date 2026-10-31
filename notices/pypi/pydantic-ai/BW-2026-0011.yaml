@@ -1,0 +1,42 @@
+---
+schema_version: "0.3"
+id: BW-2026-0011
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: removal
+breaks_in: "2.0.0b1"
+works_since: "0.2.5"
+summary: GeminiModel was removed in 2.0.0b1, with the module pydantic_ai.models.gemini, and GoogleModel takes its place.
+instructions: >-
+  Import GoogleModel from pydantic_ai.models.google in place of GeminiModel from pydantic_ai.models.gemini.
+  It uses the google-genai SDK, which the google extra installs, as in pydantic-ai-slim[google].
+  GeminiModelSettings becomes GoogleModelSettings, whose keys start with google_ in place of gemini_,
+  such as google_safety_settings for gemini_safety_settings.
+  In 2.0, the provider names of GoogleModel are google and google-cloud, in place of google-gla and google-vertex.
+affects:
+  - pydantic_ai.models.gemini.GeminiModel
+example:
+  before: |
+    from pydantic_ai.models.gemini import GeminiModel
+
+    model = GeminiModel("gemini-2.5-flash")
+  after: |
+    from pydantic_ai.models.google import GoogleModel
+
+    model = GoogleModel("gemini-2.5-flash")
+  fails_with:
+    before:
+      error: ModuleNotFoundError
+      message: No module named 'pydantic_ai.models.gemini'
+    after:
+      error: ModuleNotFoundError
+      message: No module named 'pydantic_ai.models.google'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.107.9/pydantic_ai_slim/pydantic_ai/models/gemini.py
+  - https://github.com/pydantic/pydantic-ai/blob/v0.2.5/pydantic_ai_slim/pydantic_ai/models/google.py
