@@ -1,0 +1,36 @@
+---
+schema_version: "0.3"
+id: BW-2026-0004
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "0.7.6"
+summary: OpenAIModelSettings was renamed to OpenAIChatModelSettings, and the old name was removed in 2.0.0b1.
+rename:
+  from: pydantic_ai.models.openai.OpenAIModelSettings
+  to: pydantic_ai.models.openai.OpenAIChatModelSettings
+example:
+  before: |
+    from pydantic_ai.models.openai import OpenAIModelSettings
+
+    settings = OpenAIModelSettings(temperature=0.0)
+  after: |
+    from pydantic_ai.models.openai import OpenAIChatModelSettings
+
+    settings = OpenAIChatModelSettings(temperature=0.0)
+  fails_with:
+    before:
+      error: ImportError
+      message: cannot import name 'OpenAIModelSettings'
+    after:
+      error: ImportError
+      message: cannot import name 'OpenAIChatModelSettings'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.6/pydantic_ai_slim/pydantic_ai/models/openai.py

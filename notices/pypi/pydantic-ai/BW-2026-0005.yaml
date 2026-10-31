@@ -1,0 +1,38 @@
+---
+schema_version: "0.3"
+id: BW-2026-0005
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "0.7.3"
+summary: ModelResponse.vendor_details was renamed to provider_details, and the old name was removed in 2.0.0b1.
+rename:
+  from: pydantic_ai.messages.ModelResponse.vendor_details
+  to: pydantic_ai.messages.ModelResponse.provider_details
+example:
+  before: |
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    response = ModelResponse(parts=[TextPart("hi")])
+    print(response.vendor_details)
+  after: |
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    response = ModelResponse(parts=[TextPart("hi")])
+    print(response.provider_details)
+  fails_with:
+    before:
+      error: AttributeError
+      message: has no attribute 'vendor_details'
+    after:
+      error: AttributeError
+      message: has no attribute 'provider_details'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.3/pydantic_ai_slim/pydantic_ai/messages.py
