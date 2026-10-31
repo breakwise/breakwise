@@ -1,0 +1,36 @@
+---
+schema_version: "0.3"
+id: BW-2026-0010
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "0.7.3"
+summary: Usage was renamed to RunUsage, and the old name was removed in 2.0.0b1.
+rename:
+  from: pydantic_ai.usage.Usage
+  to: pydantic_ai.usage.RunUsage
+example:
+  before: |
+    from pydantic_ai.usage import Usage
+
+    usage = Usage(requests=1)
+  after: |
+    from pydantic_ai.usage import RunUsage
+
+    usage = RunUsage(requests=1)
+  fails_with:
+    before:
+      error: ImportError
+      message: cannot import name 'Usage'
+    after:
+      error: ImportError
+      message: cannot import name 'RunUsage'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.3/pydantic_ai_slim/pydantic_ai/usage.py
