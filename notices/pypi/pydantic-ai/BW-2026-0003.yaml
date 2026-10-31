@@ -1,0 +1,36 @@
+---
+schema_version: "0.3"
+id: BW-2026-0003
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "1.0.0b1"
+summary: DeferredToolset was renamed to ExternalToolset, and the old name was removed in 2.0.0b1.
+rename:
+  from: pydantic_ai.toolsets.DeferredToolset
+  to: pydantic_ai.toolsets.ExternalToolset
+example:
+  before: |
+    from pydantic_ai.toolsets import DeferredToolset
+
+    toolset = DeferredToolset([])
+  after: |
+    from pydantic_ai.toolsets import ExternalToolset
+
+    toolset = ExternalToolset([])
+  fails_with:
+    before:
+      error: ImportError
+      message: cannot import name 'DeferredToolset'
+    after:
+      error: ImportError
+      message: cannot import name 'ExternalToolset'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.0.0b1/pydantic_ai_slim/pydantic_ai/toolsets/external.py

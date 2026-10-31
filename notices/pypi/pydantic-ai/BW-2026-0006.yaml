@@ -1,0 +1,38 @@
+---
+schema_version: "0.3"
+id: BW-2026-0006
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: rename
+breaks_in: "2.0.0b1"
+works_since: "0.7.3"
+summary: RequestUsage.request_tokens was renamed to input_tokens, and the old name was removed in 2.0.0b1.
+rename:
+  from: pydantic_ai.usage.RequestUsage.request_tokens
+  to: pydantic_ai.usage.RequestUsage.input_tokens
+example:
+  before: |
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    response = ModelResponse(parts=[TextPart("hi")])
+    print(response.usage.request_tokens)
+  after: |
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    response = ModelResponse(parts=[TextPart("hi")])
+    print(response.usage.input_tokens)
+  fails_with:
+    before:
+      error: AttributeError
+      message: has no attribute 'request_tokens'
+    after:
+      error: AttributeError
+      message: has no attribute 'input_tokens'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v0.7.3/pydantic_ai_slim/pydantic_ai/usage.py
