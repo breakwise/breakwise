@@ -21,8 +21,8 @@ on real releases of its package:
   is the first release on which it runs. For a rename, that exception must
   name the new name;
 - wherever an example must fail, its exception must match ``example.fails_with``
-  when it is set, as it must for every type but rename: its name, the first line
-  of the exception up to the first ":", and a part of its message when one is given;
+  when it is set, as it must for every type but rename: the name of its type as
+  Python prints it, and a part of its message when one is given;
 - ``restored_in``, when it is set, must be a release on PyPI. There
   ``example.before`` runs again, and so does ``example.after``. On the release
   just before it, ``example.before`` must still fail. On a latest release from
@@ -177,7 +177,7 @@ import socket
 import sys
 import traceback
 
-_example, _network_log, _error_file = sys.argv[1:4]
+_example, _network_log, _error_file, _type_file = sys.argv[1:5]
 
 
 def _blocked(*args, **kwargs):
@@ -199,6 +199,13 @@ try:
 except BaseException as error:
     with open(_error_file, "w", encoding="utf-8") as out:
         out.write("".join(traceback.format_exception_only(error)))
+    # The type's name as traceback prints it: SyntaxError prints lines of code first.
+    kind = type(error)
+    name = kind.__qualname__
+    if kind.__module__ not in ("builtins", "__main__"):
+        name = kind.__module__ + "." + name
+    with open(_type_file, "w", encoding="utf-8") as out:
+        out.write(name)
     raise
 """
 
@@ -343,13 +350,15 @@ class Run:
 
     ``returncode`` is None if the example ran too long and was stopped.
     ``error`` is the exception that ended it, as Python prints it, e.g.
-    ``ImportError: cannot import name 'X' from 'y'``, or "" if none did.
+    ``ImportError: cannot import name 'X' from 'y'``, or "" if none did, and
+    ``error_type`` is the name of its type, as Python prints it there.
     """
 
     returncode: int | None
     stderr: str = ""
     error: str = ""
     used_network: bool = False
+    error_type: str = ""
 
     @property
     def summary(self) -> str:
@@ -697,6 +706,7 @@ def run_example(
     guard = workdir / "run_example.py"
     network_log = workdir / "network.log"
     error_file = workdir / "error.txt"
+    type_file = workdir / "error-type.txt"
     example.write_text(code, encoding="utf-8")
     guard.write_text(GUARD_SCRIPT, encoding="utf-8")
     env = {"PATH": os.defpath, "HOME": str(workdir), "LANG": "C.UTF-8"}
@@ -704,7 +714,7 @@ def run_example(
     # -I ignores PYTHON* variables and user site-packages; -X utf8 fixes the output encoding.
     command = [str(interpreter), "-I", "-X", "utf8", str(guard), str(example)]
     with subprocess.Popen(  # noqa: S603 - runs the notice's example, which is the point
-        [*command, str(network_log), str(error_file)],
+        [*command, str(network_log), str(error_file), str(type_file)],
         cwd=workdir,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -720,7 +730,8 @@ def run_example(
             _stop(process)
             return Run(None, used_network=network_log.exists())
     error = error_file.read_text(encoding="utf-8", errors="replace") if error_file.exists() else ""
-    return Run(process.returncode, stderr, error, network_log.exists())
+    error_type = type_file.read_text(encoding="utf-8") if type_file.exists() else ""
+    return Run(process.returncode, stderr, error, network_log.exists(), error_type)
 
 
 def _stop(process: subprocess.Popen[str]) -> None:
@@ -760,7 +771,7 @@ def _mismatch(expected: Failure, run: Run) -> str | None:
     """How a failure differs from what is expected of it, or None."""
     if expected.named and expected.named not in run.error:
         return f"fails, but not because of {expected.named}"
-    name = exception_name(run.error)
+    name = exception_name(run)
     if expected.error and name != expected.error:
         return f"fails, but with {name or 'no exception'} instead of {expected.error}"
     if expected.message and expected.message not in run.error:
@@ -768,13 +779,13 @@ def _mismatch(expected: Failure, run: Run) -> str | None:
     return None
 
 
-def exception_name(error: str) -> str:
-    """The name of the exception in ``Run.error``: its first line up to the first ":".
+def exception_name(run: Run) -> str:
+    """The name of the exception's type, as Python prints it, or "" without an exception.
 
-    A first line without ":", such as ``KeyError``, is the name. No exception has no name.
+    That is the type's qualified name, after its module unless the module is
+    ``builtins`` or ``__main__``, such as ``TypeError`` or ``pydantic_ai.exceptions.UserError``.
     """
-    lines = error.strip().splitlines()
-    return lines[0].partition(":")[0] if lines else ""
+    return run.error_type
 
 
 def plan_path_checks(rename: Mapping[str, Any], checks: Sequence[Check]) -> list[PathCheck]:
