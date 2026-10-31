@@ -1,0 +1,48 @@
+---
+schema_version: "0.3"
+id: BW-2026-0017
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: signature
+breaks_in: "2.0.0b1"
+works_since: "1.96.0"
+summary: The timestamp() method of run results became a property in 2.0.0b1, so calling it raises TypeError.
+instructions: >-
+  Drop the parentheses: read result.timestamp in place of result.timestamp().
+  This applies to AgentRunResult, StreamedRunResult, StreamedRunResultSync and AgentStream.
+  From 1.96.0, timestamp works with and without the call, so the fix can come before the upgrade.
+affects:
+  - pydantic_ai.run.AgentRunResult.timestamp
+  - pydantic_ai.result.AgentStream.timestamp
+  - pydantic_ai.result.StreamedRunResult.timestamp
+  - pydantic_ai.result.StreamedRunResultSync.timestamp
+example:
+  before: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    result = agent.run_sync("hi")
+    print(result.timestamp().isoformat())
+  after: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    result = agent.run_sync("hi")
+    print(result.timestamp.isoformat())
+  fails_with:
+    before:
+      error: TypeError
+      message: "'datetime.datetime' object is not callable"
+    after:
+      error: AttributeError
+      message: has no attribute 'isoformat'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.96.0/pydantic_ai_slim/pydantic_ai/run.py
