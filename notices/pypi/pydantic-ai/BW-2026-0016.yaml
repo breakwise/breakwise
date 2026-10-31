@@ -1,0 +1,52 @@
+---
+schema_version: "0.3"
+id: BW-2026-0016
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: signature
+breaks_in: "2.0.0b1"
+works_since: "1.96.0"
+restored_in: "2.64.0"
+summary: The usage() method of run results became a property in 2.0.0b1, so calling it raises TypeError.
+instructions: >-
+  Drop the parentheses: read result.usage in place of result.usage().
+  This applies to AgentRunResult, AgentRun, StreamedRunResult, StreamedRunResultSync and AgentStream.
+  From 1.96.0, usage works with and without the call, so the fix can come before the upgrade.
+  From 2.64.0, the call works again, with a deprecation warning.
+affects:
+  - pydantic_ai.run.AgentRun.usage
+  - pydantic_ai.run.AgentRunResult.usage
+  - pydantic_ai.result.AgentStream.usage
+  - pydantic_ai.result.StreamedRunResult.usage
+  - pydantic_ai.result.StreamedRunResultSync.usage
+example:
+  before: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    result = agent.run_sync("hi")
+    print(result.usage().input_tokens)
+  after: |
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    agent = Agent(TestModel())
+    result = agent.run_sync("hi")
+    print(result.usage.input_tokens)
+  fails_with:
+    before:
+      error: TypeError
+      message: "'RunUsage' object is not callable"
+    after:
+      error: AttributeError
+      message: has no attribute 'input_tokens'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.96.0/pydantic_ai_slim/pydantic_ai/run.py
+  - https://github.com/pydantic/pydantic-ai/blob/v2.64.0/pydantic_ai_slim/pydantic_ai/usage.py
