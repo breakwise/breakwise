@@ -11,7 +11,7 @@ package:
 type: rename
 breaks_in: "2.0.0b1"
 works_since: "0.7.3"
-summary: The request_tokens of usage was renamed to input_tokens, and the old name was removed in 2.0.0b1.
+summary: RequestUsage.request_tokens was renamed to input_tokens, and the old name was removed in 2.0.0b1.
 rename:
   from: pydantic_ai.usage.RequestUsage.request_tokens
   to: pydantic_ai.usage.RequestUsage.input_tokens
