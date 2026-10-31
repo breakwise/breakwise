@@ -143,7 +143,7 @@ The pull request checks also lint YAML, Markdown and the workflows;
 see [`.github/workflows/checks.yml`](.github/workflows/checks.yml).
 markdownlint-cli2 needs Node.js 22.12 or later. It and its dependencies are pinned in `package-lock.json`; install them with `npm ci --ignore-scripts`.
 To update it, change its version in `package.json`, then run `npm install --package-lock-only --ignore-scripts`.
-`overrides` in `package.json` forces katex 0.19.0, which fixes [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7); remove it once markdownlint depends on a fixed katex.
+`overrides` in `package.json` forces katex 0.19.0, which fixes [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7), and re2js 2.8.8, which fixes [GHSA-gg6h-894w-4m9c](https://github.com/advisories/GHSA-gg6h-894w-4m9c); remove each one once markdownlint depends on a fixed release.
 
 ## License
 
