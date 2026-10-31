@@ -3,7 +3,7 @@ schema_version: "0.3"
 id: BW-2026-0002
 status: verified
 published: "2026-10-23"
-modified: "2026-10-24"
+modified: "2026-10-31"
 package:
   ecosystem: PyPI
   name: pydantic-ai
@@ -27,6 +27,13 @@ example:
     from pydantic_ai import Agent
 
     agent = Agent("test", toolsets=[])
+  fails_with:
+    before:
+      error: TypeError
+      message: unexpected keyword argument 'mcp_servers'
+    after:
+      error: pydantic_ai.exceptions.UserError
+      message: toolsets
 references:
   - https://pydantic.dev/docs/ai/project/changelog/
   - https://github.com/pydantic/pydantic-ai/blob/v0.4.4/pydantic_ai_slim/pydantic_ai/agent.py
