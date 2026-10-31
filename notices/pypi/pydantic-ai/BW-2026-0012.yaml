@@ -1,0 +1,43 @@
+---
+schema_version: "0.3"
+id: BW-2026-0012
+status: draft
+published: "2026-10-31"
+package:
+  ecosystem: PyPI
+  name: pydantic-ai
+  aliases:
+    - pydantic-ai-slim
+type: removal
+breaks_in: "2.0.0b1"
+works_since: "1.0.0b1"
+summary: DeferredToolCalls was removed in 2.0.0b1, and DeferredToolRequests takes its place.
+instructions: >-
+  Use DeferredToolRequests, imported from pydantic_ai, in place of DeferredToolCalls, in output_type too.
+  Read the tool calls to run outside the agent from calls in place of tool_calls.
+  The calls that need approval are in approvals.
+  tool_defs has no replacement: since 1.0 it was always an empty dict.
+affects:
+  - pydantic_ai.output.DeferredToolCalls
+example:
+  before: |
+    from pydantic_ai.output import DeferredToolCalls
+
+    requests = DeferredToolCalls()
+    print(requests.tool_calls)
+  after: |
+    from pydantic_ai import DeferredToolRequests
+
+    requests = DeferredToolRequests()
+    print(requests.calls)
+  fails_with:
+    before:
+      error: ImportError
+      message: cannot import name 'DeferredToolCalls'
+    after:
+      error: ImportError
+      message: cannot import name 'DeferredToolRequests'
+references:
+  - https://pydantic.dev/docs/ai/project/changelog/
+  - https://github.com/pydantic/pydantic-ai/blob/v1.107.9/pydantic_ai_slim/pydantic_ai/output.py
+  - https://github.com/pydantic/pydantic-ai/blob/v1.0.0b1/pydantic_ai_slim/pydantic_ai/tools.py
